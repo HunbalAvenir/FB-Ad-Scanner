@@ -1,0 +1,207 @@
+PRD Addendum: Access Model, Permissions, and Onboarding
+1) Key Constraint
+
+Most ad accounts to be scanned are not owned by us. We typically have:
+
+Partner access to the client’s assets via their Business Manager
+
+Sometimes user access (a person on our team added to their BM or ad account)
+
+Occasionally both
+
+Therefore, the tool must support scanning based on the best available access method per client, and clearly show when coverage is partial.
+
+2) Supported Access Paths (ranked)
+Path A (Preferred): Client authorizes our Business Manager, we use a System User token
+
+Best for reliability and long term scanning.
+
+How it works:
+
+Client shares the ad account (and Page, IG account if needed) with our Business Manager as a partner.
+
+Our Business Manager uses a system user to make API calls “on behalf of” the business, via a system user access token.
+
+Why this is best:
+
+Stable, not tied to an employee’s personal Facebook login
+
+Better for scheduled background scans and reduced token churn
+
+Acceptance criteria:
+
+We can scan ads, ad sets, creatives, and delivery status for the client’s shared ad account continuously without requiring a specific employee to stay logged in.
+
+Path B: Employee user token (OAuth) with ads_read or ads_management
+
+Use this when client will not set up partner sharing, or when system user access cannot be established.
+
+Notes:
+
+Requires the employee to have sufficient access to the ad account
+
+Tokens are user tied, more fragile, more likely to break when a user is removed or changes permissions
+
+Meta permissions reference: ads_read, ads_management.
+
+Acceptance criteria:
+
+The tool can scan accounts accessible to the authenticated user and clearly indicates the user identity being used for access.
+
+Path C: Public Meta Ad Library checks (optional, not a substitute)
+
+This is not sufficient for full QA of your own accounts. Use only as a backup “surface level” scan for visible creative issues, when we cannot access the ad account via API.
+
+Acceptance criteria:
+
+The UI labels this as “Public only, limited coverage,” and does not claim it is validating true Ads Manager settings.
+
+3) Onboarding Flow Changes (Client by Client)
+Step 1: Choose Access Method per Client
+
+In your portal, when adding a client, select:
+
+Partner access available
+
+User access available
+
+Both
+
+Unknown
+
+Tool should then guide to the best next step.
+
+Step 2A: Partner access onboarding checklist (recommended)
+
+Portal checklist for your team to confirm with the client:
+
+Client has added your Business Manager as a partner and shared the specific ad account (and Page if identity checks are required).
+
+Client has granted the correct role level for the shared assets.
+
+Your PRD should include a “Client instructions” panel and a downloadable one pager, with exact steps for the client to share assets to a partner Business ID.
+
+Step 2B: User access onboarding checklist (fallback)
+
+Client adds your employee to their BM or directly to the ad account with appropriate ad level permissions.
+
+Employee authenticates in your portal via Meta OAuth.
+
+4) Permissions and Coverage Requirements
+
+Define minimum needed per scan type:
+
+Minimum for read only QA scanning
+
+ads_read permission for insights and reading ads related data, plus sufficient ad account access granted by the business.
+
+Needed for optional future “auto fix”
+
+ads_management and elevated access, plus strict internal approval flow
+
+PRD rule:
+
+Phase 1 is read only
+
+Phase 2 can optionally support “fix suggestions” that generate a checklist or draft changes, but no writes without explicit opt in
+
+5) Coverage and Degradation Strategy
+
+Because access varies, the tool must track and display coverage.
+
+Add a “Coverage” widget per client and per ad account:
+
+Identity checks available (Page ID, IG actor) yes or no
+
+Creative asset metadata available yes or no
+
+Placement and optimization toggles available yes or no
+
+Delivery status available yes or no
+
+Last successful scan timestamp
+
+Access method in use (System User, User Token, Public only)
+
+Acceptance criteria:
+
+If an account loses permissions, the scan status flips to “Degraded,” issues stop updating, and an alert is sent to Slack with the fix path.
+
+6) Data Model Updates
+
+Add these tables or fields:
+
+ClientAccessProfile
+
+client_id
+
+access_mode: partner, user, both, public_only
+
+business_manager_id_ours
+
+business_manager_id_client (optional)
+
+allowed_page_ids
+
+allowed_ig_actor_ids
+
+allowed_domains
+
+utm_template_id
+
+MetaCredential
+
+credential_type: system_user_token, user_token
+
+token_owner: system_user_id or user_id
+
+scopes granted
+
+created_at, expires_at
+
+last_validated_at
+
+status: active, expired, revoked, insufficient_permissions
+
+AdAccountCoverage
+
+ad_account_id
+
+credential_id in use
+
+coverage_flags (booleans)
+
+last_scan_success_at
+
+last_scan_error
+
+last_scan_error_code
+
+7) Scanner Logic Updates (important)
+
+In the collector stage, before pulling data:
+
+Validate token and permissions
+
+Validate ad account accessibility
+
+Pull a small “smoke test” query first (fast fail)
+
+If fail, mark account degraded, stop deeper pulls, send alert
+
+Acceptance criteria:
+
+You never burn rate limits doing full pulls when access is broken.
+
+You always know exactly why the scan failed and what to do next.
+
+8) Issue Routing Updates
+
+Add “Access related” issue type:
+
+“Cannot scan account, missing permissions”
+
+“Partner access exists but system user token not configured”
+
+“User token expired or user removed from BM”
+These are operational issues, not buyer mistakes, and should route to ops or account manager.
