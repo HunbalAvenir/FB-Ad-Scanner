@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertClientSchema, insertCredentialSchema, insertAdAccountSchema, insertScanIssueSchema } from "@shared/schema";
+import { scanAllAccounts, scanSingleAccount } from "./scanner";
+import { validateToken, smokeTestAdAccount } from "./meta-api";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -120,6 +122,52 @@ export async function registerRoutes(
   app.delete("/api/issues/:id", async (req, res) => {
     await storage.deleteIssue(Number(req.params.id));
     res.status(204).send();
+  });
+
+  app.post("/api/scan/all", async (_req, res) => {
+    try {
+      const results = await scanAllAccounts();
+      res.json({
+        scanned: results.length,
+        successful: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+        totalIssuesFound: results.reduce((sum, r) => sum + r.issuesFound, 0),
+        results,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/scan/account/:id", async (req, res) => {
+    try {
+      const result = await scanSingleAccount(Number(req.params.id));
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/validate-token", async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: "Token required" });
+    try {
+      const result = await validateToken(token);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/test-account-access", async (req, res) => {
+    const { accountId, token } = req.body;
+    if (!accountId || !token) return res.status(400).json({ message: "accountId and token required" });
+    try {
+      const result = await smokeTestAdAccount(accountId, token);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   return httpServer;

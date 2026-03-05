@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, CheckCircle2, FileText, Download } from "lucide-react";
+import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, CheckCircle2, FileText, Download, Scan, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -149,26 +149,7 @@ export default function ClientDetailPage() {
           ) : (
             <div className="space-y-3">
               {accounts?.map(account => (
-                <Card key={account.id} data-testid={`card-ad-account-${account.id}`}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-3 mb-3">
-                      <div>
-                        <p className="font-medium">{account.accountName}</p>
-                        <p className="text-xs text-muted-foreground font-mono">{account.accountId}</p>
-                      </div>
-                      <StatusBadge status={account.status} />
-                    </div>
-                    <CoverageWidget account={account} />
-                    {account.lastScanError && (
-                      <div className="mt-3 p-2 rounded-md bg-destructive/5 border border-destructive/10">
-                        <p className="text-xs text-destructive">{account.lastScanError}</p>
-                        {account.lastScanErrorCode && (
-                          <p className="text-xs text-muted-foreground mt-0.5 font-mono">{account.lastScanErrorCode}</p>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                <AdAccountCard key={account.id} account={account} clientId={clientId} />
               ))}
             </div>
           )}
@@ -465,6 +446,70 @@ function AddCredentialDialog({ clientId }: { clientId: number }) {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: number }) {
+  const { toast } = useToast();
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/scan/account/${account.id}`);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", clientId, "ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/issues"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({
+        title: data.success ? "Scan complete" : "Scan failed",
+        description: data.success
+          ? `Found ${data.issuesFound} issue${data.issuesFound !== 1 ? "s" : ""}.`
+          : data.error || "Unknown error",
+        variant: data.success ? "default" : "destructive",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Scan failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card data-testid={`card-ad-account-${account.id}`}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <p className="font-medium" data-testid={`text-account-name-${account.id}`}>{account.accountName}</p>
+            <p className="text-xs text-muted-foreground font-mono" data-testid={`text-account-id-${account.id}`}>{account.accountId}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => scanMutation.mutate()}
+              disabled={scanMutation.isPending}
+              data-testid={`button-scan-account-${account.id}`}
+            >
+              {scanMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Scan className="h-4 w-4" />
+              )}
+            </Button>
+            <StatusBadge status={account.status} />
+          </div>
+        </div>
+        <CoverageWidget account={account} />
+        {account.lastScanError && (
+          <div className="mt-3 p-2 rounded-md bg-destructive/5 border border-destructive/10" data-testid={`text-scan-error-${account.id}`}>
+            <p className="text-xs text-destructive">{account.lastScanError}</p>
+            {account.lastScanErrorCode && (
+              <p className="text-xs text-muted-foreground mt-0.5 font-mono">{account.lastScanErrorCode}</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

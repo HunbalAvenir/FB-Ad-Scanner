@@ -1,11 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge, AccessModeBadge } from "@/components/status-badge";
 import { CoverageWidget } from "@/components/coverage-widget";
 import { Link } from "wouter";
-import { Users, Radio, AlertTriangle, ShieldAlert, Activity, ArrowRight } from "lucide-react";
+import { Users, Radio, AlertTriangle, ShieldAlert, Activity, ArrowRight, Scan, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Client, AdAccount, ScanIssue } from "@shared/schema";
 
 export default function Dashboard() {
@@ -29,6 +31,28 @@ export default function Dashboard() {
     queryKey: ["/api/issues"],
   });
 
+  const { toast } = useToast();
+
+  const scanAll = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/scan/all");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/issues"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({
+        title: "Scan complete",
+        description: `Scanned ${data.scanned} accounts: ${data.successful} successful, ${data.failed} failed. ${data.totalIssuesFound} new issues found.`,
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Scan failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const isLoading = statsLoading || clientsLoading || accountsLoading || issuesLoading;
 
   const degradedAccounts = accounts?.filter(a => a.status === "degraded" || a.status === "error") || [];
@@ -37,9 +61,18 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-1">Monitor your Meta Ads QA scanning coverage across all clients.</p>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">Dashboard</h1>
+          <p className="text-sm text-muted-foreground mt-1">Monitor your Meta Ads QA scanning coverage across all clients.</p>
+        </div>
+        <Button onClick={() => scanAll.mutate()} disabled={scanAll.isPending} data-testid="button-scan-all">
+          {scanAll.isPending ? (
+            <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Scanning...</>
+          ) : (
+            <><Scan className="h-4 w-4 mr-1" /> Scan All Accounts</>
+          )}
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
