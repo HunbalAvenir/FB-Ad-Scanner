@@ -28,7 +28,7 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 
 ## Key Pages
 - `/` - Dashboard with stats (blockers/high/medium counts), degraded accounts, recent issues, client overview
-- `/clients` - Client list with add client dialog + "Import from Meta" bulk import (fetches ad accounts via Meta API, select/deselect, optional client name override, creates clients + ad accounts)
+- `/clients` - Client list with add client dialog + "Import Accounts" bulk import (Facebook OAuth login, lists all ad accounts from user's Business Manager, select/deselect, optional client name override, creates clients + ad accounts)
 - `/clients/:id` - Client detail with tabs: Accounts (per-account scan + URL audit buttons), Credentials, Issues (with Ads Manager links, preview links, recommendedFix), Onboarding
 - `/ad-accounts` - All ad accounts with coverage visualization
 - `/issues` - Issue tracker with Open/In Progress/Closed tabs, severity badges, rule IDs, evidence, Ads Manager deep links, filters (severity/type/rule/client/objective), bulk actions ("Resolve All"/"Dismiss All" for same rule), reopen resolved issues
@@ -39,7 +39,8 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 - `server/scanner.ts` - Structured rule engine with Finding interface
 - Token resolution: META_SYSTEM_USER_TOKEN env var as fallback for system_user_token credentials
 - Ad account IDs auto-prefixed with `act_`
-- Discovery routes: `GET /api/meta/ad-accounts` (lists accounts via `/me/adaccounts` + BM fallback), `POST /api/clients/bulk-import` (creates clients + ad accounts from selection)
+- Facebook OAuth: `GET /api/auth/facebook` (login redirect), `GET /api/auth/facebook/callback` (token exchange), `GET /api/auth/facebook/status`, `POST /api/auth/facebook/logout`
+- Discovery routes: `GET /api/meta/user-ad-accounts` (lists accounts from logged-in user's token), `GET /api/meta/ad-accounts` (system user token fallback), `POST /api/meta/verify-accounts` (verify specific IDs), `POST /api/clients/bulk-import` (creates clients + ad accounts from selection)
 - Scan routes: `POST /api/scan/all`, `POST /api/scan/account/:id`, `POST /api/validate-token`
 - URL audit route: `GET /api/ad-accounts/:id/urls` — returns all destination URLs found in the account's ads with domain, UTM parameters, and Ads Manager links
 - Issues store `previewUrl` from Meta's `preview_shareable_link` field

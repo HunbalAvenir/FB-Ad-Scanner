@@ -1,15 +1,90 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import crypto from "crypto";
 import { storage } from "./storage";
 import { insertClientSchema, insertCredentialSchema, insertAdAccountSchema, insertScanIssueSchema } from "@shared/schema";
 import { z } from "zod";
 import { scanAllAccounts, scanSingleAccount, auditAccountUrls } from "./scanner";
 import { validateToken, smokeTestAdAccount, listAdAccounts } from "./meta-api";
 
+function getBaseUrl(req: any): string {
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  const META_APP_ID = process.env.META_APP_ID;
+  const META_APP_SECRET = process.env.META_APP_SECRET;
+
+  app.get("/api/auth/facebook", (req, res) => {
+    if (!META_APP_ID) return res.status(500).json({ message: "META_APP_ID not configured" });
+    const state = crypto.randomUUID();
+    req.session.oauthState = state;
+    const redirectUri = `${getBaseUrl(req)}/api/auth/facebook/callback`;
+    const scopes = "ads_read,business_management";
+    const authUrl = `https://www.facebook.com/v21.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&response_type=code&state=${state}`;
+    res.redirect(authUrl);
+  });
+
+  app.get("/api/auth/facebook/callback", async (req, res) => {
+    const { code, state } = req.query;
+    if (!code || !META_APP_ID || !META_APP_SECRET) {
+      return res.redirect("/clients?auth_error=missing_params");
+    }
+    if (!state || state !== req.session.oauthState) {
+      return res.redirect("/clients?auth_error=invalid_state");
+    }
+    delete req.session.oauthState;
+    const redirectUri = `${getBaseUrl(req)}/api/auth/facebook/callback`;
+    try {
+      const tokenUrl = `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&redirect_uri=${encodeURIComponent(redirectUri)}&code=${code}`;
+      const tokenRes = await fetch(tokenUrl);
+      const tokenData = await tokenRes.json() as any;
+      if (tokenData.error) {
+        return res.redirect(`/clients?auth_error=${encodeURIComponent(tokenData.error.message)}`);
+      }
+      const userRes = await fetch(`https://graph.facebook.com/v21.0/me?access_token=${tokenData.access_token}&fields=name`);
+      const userData = await userRes.json() as any;
+      req.session.metaUserToken = tokenData.access_token;
+      req.session.metaUserName = userData.name || "Unknown";
+      res.redirect("/clients?auth=success");
+    } catch (err: any) {
+      res.redirect(`/clients?auth_error=${encodeURIComponent(err.message)}`);
+    }
+  });
+
+  app.get("/api/auth/facebook/status", (req, res) => {
+    res.json({
+      authenticated: !!req.session.metaUserToken,
+      name: req.session.metaUserName || null,
+    });
+  });
+
+  app.post("/api/auth/facebook/logout", (req, res) => {
+    req.session.destroy((err) => {
+      if (err) return res.status(500).json({ message: "Failed to logout" });
+      res.json({ success: true });
+    });
+  });
+
+  app.get("/api/meta/user-ad-accounts", async (req, res) => {
+    const token = req.session.metaUserToken;
+    if (!token) return res.status(401).json({ message: "Not authenticated. Please login with Facebook first." });
+    const result = await listAdAccounts(token);
+    if (result.error) return res.status(400).json({ message: result.error });
+    const existingAccounts = await storage.getAllAdAccounts();
+    const existingIds = new Set(existingAccounts.map(a => a.accountId));
+    const accounts = (result.accounts || []).map(a => ({
+      ...a,
+      alreadyImported: existingIds.has(a.id),
+    }));
+    res.json(accounts);
+  });
 
   app.get("/api/dashboard/stats", async (_req, res) => {
     const stats = await storage.getDashboardStats();
