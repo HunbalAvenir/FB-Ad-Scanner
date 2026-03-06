@@ -24,8 +24,16 @@ interface ScanResult {
   errorCode?: string;
 }
 
+function resolveToken(credential: Credential): string {
+  if (credential.credentialType === "system_user_token") {
+    const envToken = process.env.META_SYSTEM_USER_TOKEN;
+    if (envToken) return envToken;
+  }
+  return credential.tokenOwner;
+}
+
 export async function scanAdAccount(adAccount: AdAccount, credential: Credential, client: Client): Promise<ScanResult> {
-  const token = credential.tokenOwner;
+  const token = resolveToken(credential);
 
   log(`Scanning account ${adAccount.accountName} (${adAccount.accountId})`, "scanner");
 
