@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge, AccessModeBadge } from "@/components/status-badge";
@@ -8,18 +8,42 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Link } from "wouter";
-import { Plus, Users, ArrowRight } from "lucide-react";
-import { useState } from "react";
+import { Plus, Users, ArrowRight, Download, Loader2, Search, CheckSquare, Square, AlertCircle } from "lucide-react";
+import { useState, useMemo } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Client, AdAccount, ScanIssue } from "@shared/schema";
+
+const ACCOUNT_STATUS_LABELS: Record<number, string> = {
+  1: "Active",
+  2: "Disabled",
+  3: "Unsettled",
+  7: "Pending Review",
+  8: "Pending Closure",
+  9: "In Grace Period",
+  100: "Pending Risk Review",
+  101: "Any Active",
+  201: "Any Closed",
+};
+
+interface MetaAccount {
+  id: string;
+  name: string;
+  account_status: number;
+  business_name?: string;
+  currency?: string;
+  timezone_name?: string;
+  alreadyImported: boolean;
+}
 
 export default function ClientsPage() {
   const { data: clients, isLoading } = useQuery<Client[]>({ queryKey: ["/api/clients"] });
   const { data: accounts } = useQuery<AdAccount[]>({ queryKey: ["/api/ad-accounts"] });
   const { data: issues } = useQuery<ScanIssue[]>({ queryKey: ["/api/issues"] });
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -28,19 +52,34 @@ export default function ClientsPage() {
           <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">Clients</h1>
           <p className="text-sm text-muted-foreground mt-1">Manage client access profiles and onboarding.</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-client">
-              <Plus className="h-4 w-4 mr-1" /> Add Client
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Client</DialogTitle>
-            </DialogHeader>
-            <AddClientForm onSuccess={() => setDialogOpen(false)} />
-          </DialogContent>
-        </Dialog>
+        <div className="flex items-center gap-2">
+          <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" data-testid="button-import-accounts">
+                <Download className="h-4 w-4 mr-1" /> Import from Meta
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+              <DialogHeader>
+                <DialogTitle>Import Ad Accounts from Meta</DialogTitle>
+              </DialogHeader>
+              <BulkImportForm onSuccess={() => setImportDialogOpen(false)} />
+            </DialogContent>
+          </Dialog>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-client">
+                <Plus className="h-4 w-4 mr-1" /> Add Client
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add New Client</DialogTitle>
+              </DialogHeader>
+              <AddClientForm onSuccess={() => setDialogOpen(false)} />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {isLoading ? (
@@ -98,6 +137,209 @@ export default function ClientsPage() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [clientNameOverrides, setClientNameOverrides] = useState<Record<string, string>>({});
+
+  const { data: metaAccounts, isLoading, error } = useQuery<MetaAccount[]>({
+    queryKey: ["/api/meta/ad-accounts"],
+    staleTime: 60_000,
+  });
+
+  const importMutation = useMutation({
+    mutationFn: async () => {
+      const accounts = Array.from(selected).map(id => {
+        const acct = metaAccounts?.find(a => a.id === id);
+        return {
+          metaAccountId: id,
+          accountName: acct?.name || id,
+          businessName: acct?.business_name || undefined,
+          clientName: clientNameOverrides[id] || undefined,
+        };
+      });
+      const res = await apiRequest("POST", "/api/clients/bulk-import", { accounts });
+      return res.json();
+    },
+    onSuccess: (data: { created: number; skipped: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({
+        title: "Import complete",
+        description: `${data.created} account${data.created !== 1 ? "s" : ""} imported${data.skipped > 0 ? `, ${data.skipped} skipped (already exist)` : ""}.`,
+      });
+      onSuccess();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const filtered = useMemo(() => {
+    if (!metaAccounts) return [];
+    if (!search) return metaAccounts;
+    const q = search.toLowerCase();
+    return metaAccounts.filter(a =>
+      a.name.toLowerCase().includes(q) ||
+      a.id.toLowerCase().includes(q) ||
+      (a.business_name || "").toLowerCase().includes(q)
+    );
+  }, [metaAccounts, search]);
+
+  const available = filtered.filter(a => !a.alreadyImported);
+  const imported = filtered.filter(a => a.alreadyImported);
+
+  const toggleAccount = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelected(new Set(available.map(a => a.id)));
+  };
+
+  const selectNone = () => {
+    setSelected(new Set());
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 gap-3">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Fetching ad accounts from Meta...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 gap-3">
+        <AlertCircle className="h-6 w-6 text-destructive" />
+        <p className="text-sm text-destructive">Failed to load accounts</p>
+        <p className="text-xs text-muted-foreground">{(error as Error).message}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4 min-h-0">
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by name, ID, or business..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-9"
+            data-testid="input-import-search"
+          />
+        </div>
+        <Button variant="ghost" size="sm" onClick={selectAll} data-testid="button-select-all">
+          Select All ({available.length})
+        </Button>
+        <Button variant="ghost" size="sm" onClick={selectNone} data-testid="button-select-none">
+          Clear
+        </Button>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        {metaAccounts?.length || 0} accounts found.
+        {imported.length > 0 && ` ${imported.length} already imported.`}
+        {selected.size > 0 && ` ${selected.size} selected.`}
+      </p>
+
+      <div className="overflow-y-auto max-h-[50vh] border rounded-md divide-y">
+        {available.length === 0 && imported.length === 0 && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            {search ? "No accounts match your search." : "No ad accounts found."}
+          </div>
+        )}
+        {available.map(acct => (
+          <label
+            key={acct.id}
+            className={`flex items-start gap-3 p-3 cursor-pointer hover:bg-muted/50 transition-colors ${selected.has(acct.id) ? "bg-primary/5" : ""}`}
+            data-testid={`row-account-${acct.id}`}
+          >
+            <Checkbox
+              checked={selected.has(acct.id)}
+              onCheckedChange={() => toggleAccount(acct.id)}
+              className="mt-0.5"
+              data-testid={`checkbox-account-${acct.id}`}
+            />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-sm font-medium truncate" data-testid={`text-account-name-${acct.id}`}>{acct.name}</p>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${acct.account_status === 1 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300"}`}>
+                  {ACCOUNT_STATUS_LABELS[acct.account_status] || `Status ${acct.account_status}`}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                <span className="font-mono">{acct.id}</span>
+                {acct.business_name && <span>{acct.business_name}</span>}
+                {acct.currency && <span>{acct.currency}</span>}
+              </div>
+              {selected.has(acct.id) && (
+                <div className="mt-2">
+                  <Input
+                    placeholder={acct.business_name || acct.name}
+                    value={clientNameOverrides[acct.id] || ""}
+                    onChange={e => setClientNameOverrides(prev => ({ ...prev, [acct.id]: e.target.value }))}
+                    className="h-7 text-xs"
+                    data-testid={`input-client-name-${acct.id}`}
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Client name (defaults to {acct.business_name || acct.name})
+                  </p>
+                </div>
+              )}
+            </div>
+          </label>
+        ))}
+        {imported.length > 0 && (
+          <>
+            <div className="px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground sticky top-0">
+              Already imported
+            </div>
+            {imported.map(acct => (
+              <div key={acct.id} className="flex items-start gap-3 p-3 opacity-50" data-testid={`row-imported-${acct.id}`}>
+                <Checkbox checked disabled className="mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm truncate">{acct.name}</p>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                    <span className="font-mono">{acct.id}</span>
+                    {acct.business_name && <span>{acct.business_name}</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      <Button
+        onClick={() => importMutation.mutate()}
+        disabled={selected.size === 0 || importMutation.isPending}
+        className="w-full"
+        data-testid="button-submit-import"
+      >
+        {importMutation.isPending ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-1 animate-spin" /> Importing...
+          </>
+        ) : (
+          `Import ${selected.size} Account${selected.size !== 1 ? "s" : ""}`
+        )}
+      </Button>
     </div>
   );
 }

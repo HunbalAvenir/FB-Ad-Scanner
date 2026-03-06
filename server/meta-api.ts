@@ -65,6 +65,79 @@ export async function validateToken(token: string): Promise<{
   };
 }
 
+export interface MetaAdAccountInfo {
+  id: string;
+  name: string;
+  account_status: number;
+  business_name?: string;
+  currency?: string;
+  timezone_name?: string;
+}
+
+async function paginateAccounts(token: string, initialPath: string): Promise<{ accounts: MetaAdAccountInfo[]; error?: string }> {
+  const allAccounts: MetaAdAccountInfo[] = [];
+  let path = initialPath;
+  const params: Record<string, string> = {
+    fields: "name,account_status,business_name,currency,timezone_name",
+    limit: "200",
+  };
+
+  while (true) {
+    const res = await metaFetch<MetaAdAccountInfo[]>(path, token, params);
+    if (res.error) {
+      return { accounts: allAccounts, error: res.error.message };
+    }
+    if (Array.isArray(res.data)) {
+      allAccounts.push(...res.data);
+    }
+    if (res.paging?.next) {
+      const nextUrl = new URL(res.paging.next);
+      path = nextUrl.pathname.replace("/v21.0", "");
+      params.after = nextUrl.searchParams.get("after") || "";
+      delete params.limit;
+    } else {
+      break;
+    }
+  }
+
+  return { accounts: allAccounts };
+}
+
+export async function listAdAccounts(token: string): Promise<{ accounts?: MetaAdAccountInfo[]; error?: string }> {
+  const primary = await paginateAccounts(token, "/me/adaccounts");
+  if (primary.error && primary.accounts.length === 0) {
+    return { error: primary.error };
+  }
+  let allAccounts = primary.accounts;
+
+  if (allAccounts.length === 0) {
+    const meRes = await metaFetch<any>("/me", token, { fields: "id" });
+    if (meRes.error) {
+      return { error: meRes.error.message };
+    }
+    const userId = (meRes.data as any)?.id;
+    if (userId) {
+      const bizRes = await metaFetch<any[]>(`/${userId}/businesses`, token, { fields: "id,name", limit: "100" });
+      const businesses = Array.isArray(bizRes.data) ? bizRes.data : [];
+
+      for (const biz of businesses) {
+        const owned = await paginateAccounts(token, `/${biz.id}/owned_ad_accounts`);
+        const client = await paginateAccounts(token, `/${biz.id}/client_ad_accounts`);
+        allAccounts.push(...owned.accounts, ...client.accounts);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const deduped = allAccounts.filter(a => {
+    if (seen.has(a.id)) return false;
+    seen.add(a.id);
+    return true;
+  });
+
+  return { accounts: deduped };
+}
+
 export async function smokeTestAdAccount(accountId: string, token: string): Promise<{
   accessible: boolean;
   accountName?: string;

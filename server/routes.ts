@@ -2,8 +2,9 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertClientSchema, insertCredentialSchema, insertAdAccountSchema, insertScanIssueSchema } from "@shared/schema";
+import { z } from "zod";
 import { scanAllAccounts, scanSingleAccount, auditAccountUrls } from "./scanner";
-import { validateToken, smokeTestAdAccount } from "./meta-api";
+import { validateToken, smokeTestAdAccount, listAdAccounts } from "./meta-api";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -42,6 +43,83 @@ export async function registerRoutes(
   app.delete("/api/clients/:id", async (req, res) => {
     await storage.deleteClient(Number(req.params.id));
     res.status(204).send();
+  });
+
+  app.get("/api/meta/ad-accounts", async (_req, res) => {
+    const token = process.env.META_SYSTEM_USER_TOKEN;
+    if (!token) return res.status(500).json({ message: "META_SYSTEM_USER_TOKEN not configured" });
+    const result = await listAdAccounts(token);
+    if (result.error) return res.status(400).json({ message: result.error });
+    const existingAccounts = await storage.getAllAdAccounts();
+    const existingIds = new Set(existingAccounts.map(a => a.accountId));
+    const accounts = (result.accounts || []).map(a => ({
+      ...a,
+      alreadyImported: existingIds.has(a.id),
+    }));
+    res.json(accounts);
+  });
+
+  const bulkImportSchema = z.object({
+    accounts: z.array(z.object({
+      metaAccountId: z.string().min(1),
+      accountName: z.string().min(1),
+      businessName: z.string().optional(),
+      clientName: z.string().optional(),
+    })).min(1, "At least one account is required"),
+  });
+
+  app.post("/api/clients/bulk-import", async (req, res) => {
+    const parsed = bulkImportSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+    const { accounts } = parsed.data;
+
+    const created: Array<{ client: any; adAccount: any }> = [];
+    const skipped: string[] = [];
+
+    const existingAccounts = await storage.getAllAdAccounts();
+    const existingIds = new Set(existingAccounts.map(a => a.accountId));
+
+    for (const acct of accounts) {
+      if (existingIds.has(acct.metaAccountId)) {
+        skipped.push(acct.metaAccountId);
+        continue;
+      }
+
+      const clientName = acct.clientName || acct.businessName || acct.accountName;
+      const existingClients = await storage.getClients();
+      let client = existingClients.find(c => c.name === clientName);
+
+      if (!client) {
+        client = await storage.createClient({
+          name: clientName,
+          accessMode: "partner",
+          status: "onboarding",
+          notes: acct.businessName ? `Business: ${acct.businessName}` : null,
+          businessManagerIdOurs: null,
+          businessManagerIdClient: null,
+        });
+      }
+
+      const adAccount = await storage.createAdAccount({
+        clientId: client.id,
+        accountId: acct.metaAccountId,
+        accountName: acct.accountName,
+        status: "pending",
+        credentialId: null,
+        identityChecksAvailable: false,
+        creativeMetadataAvailable: false,
+        placementTogglesAvailable: false,
+        deliveryStatusAvailable: false,
+        lastScanSuccessAt: null,
+        lastScanError: null,
+        lastScanErrorCode: null,
+      });
+
+      existingIds.add(acct.metaAccountId);
+      created.push({ client, adAccount });
+    }
+
+    res.status(201).json({ created: created.length, skipped: skipped.length });
   });
 
   app.get("/api/clients/:clientId/credentials", async (req, res) => {
