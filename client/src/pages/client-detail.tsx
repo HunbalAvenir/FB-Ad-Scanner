@@ -10,8 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, AlertOctagon, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw, Filter, X, Info } from "lucide-react";
+import { useState, useMemo } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Client, AdAccount, Credential, ScanIssue } from "@shared/schema";
@@ -48,6 +48,45 @@ export default function ClientDetailPage() {
 
   const clientIssues = issues?.filter(i => i.clientId === clientId) || [];
   const isLoading = clientLoading || accountsLoading || credsLoading;
+
+  const [issueTab, setIssueTab] = useState("open");
+  const [filterSeverity, setFilterSeverity] = useState("all");
+  const [filterType, setFilterType] = useState("all");
+  const [filterRule, setFilterRule] = useState("all");
+  const [filterObjective, setFilterObjective] = useState("all");
+  const [filterAccount, setFilterAccount] = useState("all");
+
+  const issueFilterOptions = useMemo(() => {
+    const severities = [...new Set(clientIssues.map(i => i.severity))];
+    const types = [...new Set(clientIssues.map(i => i.issueType))];
+    const rules = [...new Set(clientIssues.map(i => i.ruleId).filter(Boolean))] as string[];
+    const objectives = [...new Set(clientIssues.map(i => (i as any).campaignObjective).filter(Boolean))] as string[];
+    return { severities, types, rules, objectives };
+  }, [clientIssues]);
+
+  const applyIssueFilters = (list: ScanIssue[]) => {
+    return list.filter(i => {
+      if (filterSeverity !== "all" && i.severity !== filterSeverity) return false;
+      if (filterType !== "all" && i.issueType !== filterType) return false;
+      if (filterRule !== "all" && i.ruleId !== filterRule) return false;
+      if (filterObjective !== "all" && (i as any).campaignObjective !== filterObjective) return false;
+      if (filterAccount !== "all" && i.adAccountId !== Number(filterAccount)) return false;
+      return true;
+    });
+  };
+
+  const hasActiveIssueFilters = filterSeverity !== "all" || filterType !== "all" || filterRule !== "all" || filterObjective !== "all" || filterAccount !== "all";
+  const clearIssueFilters = () => { setFilterSeverity("all"); setFilterType("all"); setFilterRule("all"); setFilterObjective("all"); setFilterAccount("all"); };
+
+  const openIssues = clientIssues.filter(i => i.status === "open");
+  const acknowledgedIssues = clientIssues.filter(i => i.status === "acknowledged");
+  const closedIssues = clientIssues.filter(i => i.status === "resolved" || i.status === "dismissed");
+
+  const filteredOpen = applyIssueFilters(openIssues);
+  const filteredAcknowledged = applyIssueFilters(acknowledgedIssues);
+  const filteredClosed = applyIssueFilters(closedIssues);
+
+  const formatObjective = (obj: string) => obj.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
   if (isLoading) {
     return (
@@ -202,7 +241,7 @@ export default function ClientDetailPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="issues" className="mt-4 space-y-3">
+        <TabsContent value="issues" className="mt-4 space-y-4">
           {clientIssues.length === 0 ? (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
@@ -212,10 +251,142 @@ export default function ClientDetailPage() {
               </CardContent>
             </Card>
           ) : (
-            clientIssues.map(issue => {
-              const acct = accounts?.find(a => a.id === issue.adAccountId);
-              return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
-            })
+            <>
+              {openIssues.length > 0 && (
+                <div className="flex items-center gap-4 text-sm">
+                  {openIssues.filter(i => i.severity === "blocker").length > 0 && (
+                    <button onClick={() => setFilterSeverity("blocker")} className="flex items-center gap-1.5 hover:opacity-80 cursor-pointer" data-testid="filter-issue-blocker">
+                      <AlertOctagon className="h-4 w-4 text-destructive" />
+                      <span className="font-medium text-destructive">{openIssues.filter(i => i.severity === "blocker").length} Blocker{openIssues.filter(i => i.severity === "blocker").length !== 1 ? "s" : ""}</span>
+                    </button>
+                  )}
+                  {openIssues.filter(i => i.severity === "high").length > 0 && (
+                    <button onClick={() => setFilterSeverity("high")} className="flex items-center gap-1.5 hover:opacity-80 cursor-pointer" data-testid="filter-issue-high">
+                      <AlertTriangle className="h-4 w-4 text-destructive" />
+                      <span className="font-medium">{openIssues.filter(i => i.severity === "high").length} High</span>
+                    </button>
+                  )}
+                  {openIssues.filter(i => i.severity === "medium").length > 0 && (
+                    <button onClick={() => setFilterSeverity("medium")} className="flex items-center gap-1.5 hover:opacity-80 cursor-pointer" data-testid="filter-issue-medium">
+                      <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                      <span className="font-medium">{openIssues.filter(i => i.severity === "medium").length} Medium</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <Filter className="h-4 w-4 text-muted-foreground" />
+                <Select value={filterSeverity} onValueChange={setFilterSeverity}>
+                  <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="filter-issue-severity">
+                    <SelectValue placeholder="Severity" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Severities</SelectItem>
+                    {issueFilterOptions.severities.map(s => (
+                      <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={filterType} onValueChange={setFilterType}>
+                  <SelectTrigger className="w-[140px] h-8 text-xs" data-testid="filter-issue-type">
+                    <SelectValue placeholder="Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
+                    {issueFilterOptions.types.map(t => (
+                      <SelectItem key={t} value={t}>{t.replace(/_/g, " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={filterRule} onValueChange={setFilterRule}>
+                  <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="filter-issue-rule">
+                    <SelectValue placeholder="Rule" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Rules</SelectItem>
+                    {issueFilterOptions.rules.map(r => (
+                      <SelectItem key={r} value={r}>{r}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {issueFilterOptions.objectives.length > 0 && (
+                  <Select value={filterObjective} onValueChange={setFilterObjective}>
+                    <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="filter-issue-objective">
+                      <SelectValue placeholder="Objective" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Objectives</SelectItem>
+                      {issueFilterOptions.objectives.map(o => (
+                        <SelectItem key={o} value={o}>{formatObjective(o)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {accounts && accounts.length > 1 && (
+                  <Select value={filterAccount} onValueChange={setFilterAccount}>
+                    <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="filter-issue-account">
+                      <SelectValue placeholder="Account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Accounts</SelectItem>
+                      {accounts.map(a => (
+                        <SelectItem key={a.id} value={String(a.id)}>{a.accountName}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {hasActiveIssueFilters && (
+                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={clearIssueFilters} data-testid="button-clear-issue-filters">
+                    <X className="h-3 w-3 mr-1" /> Clear
+                  </Button>
+                )}
+              </div>
+
+              <Tabs value={issueTab} onValueChange={setIssueTab}>
+                <TabsList>
+                  <TabsTrigger value="open" data-testid="tab-issues-open">
+                    Open ({filteredOpen.length}{hasActiveIssueFilters ? `/${openIssues.length}` : ""})
+                  </TabsTrigger>
+                  <TabsTrigger value="acknowledged" data-testid="tab-issues-acknowledged">
+                    In Progress ({filteredAcknowledged.length}{hasActiveIssueFilters ? `/${acknowledgedIssues.length}` : ""})
+                  </TabsTrigger>
+                  <TabsTrigger value="closed" data-testid="tab-issues-closed">
+                    Closed ({filteredClosed.length}{hasActiveIssueFilters ? `/${closedIssues.length}` : ""})
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="open" className="mt-3 space-y-3">
+                  {filteredOpen.length === 0 ? (
+                    <Card><CardContent className="flex flex-col items-center justify-center py-8"><CheckCircle2 className="h-8 w-8 text-primary mb-2 opacity-60" /><p className="text-sm font-medium">No open issues</p></CardContent></Card>
+                  ) : (
+                    filteredOpen.map(issue => {
+                      const acct = accounts?.find(a => a.id === issue.adAccountId);
+                      return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
+                    })
+                  )}
+                </TabsContent>
+                <TabsContent value="acknowledged" className="mt-3 space-y-3">
+                  {filteredAcknowledged.length === 0 ? (
+                    <Card><CardContent className="flex flex-col items-center justify-center py-8"><Info className="h-8 w-8 text-muted-foreground mb-2 opacity-60" /><p className="text-sm font-medium">No in-progress issues</p></CardContent></Card>
+                  ) : (
+                    filteredAcknowledged.map(issue => {
+                      const acct = accounts?.find(a => a.id === issue.adAccountId);
+                      return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
+                    })
+                  )}
+                </TabsContent>
+                <TabsContent value="closed" className="mt-3 space-y-3">
+                  {filteredClosed.length === 0 ? (
+                    <Card><CardContent className="flex flex-col items-center justify-center py-8"><CheckCircle2 className="h-8 w-8 text-primary mb-2 opacity-60" /><p className="text-sm font-medium">No closed issues</p></CardContent></Card>
+                  ) : (
+                    filteredClosed.map(issue => {
+                      const acct = accounts?.find(a => a.id === issue.adAccountId);
+                      return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
+                    })
+                  )}
+                </TabsContent>
+              </Tabs>
+            </>
           )}
         </TabsContent>
 
