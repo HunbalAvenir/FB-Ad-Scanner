@@ -109,6 +109,7 @@ export interface MetaAdCreativeDetail {
   instagram_actor_id?: string;
   object_type?: string;
   effective_object_story_id?: string;
+  url_tags?: string;
 }
 
 export interface MetaAd {
@@ -129,7 +130,7 @@ export async function getAds(accountId: string, token: string, limit = 100): Pro
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
   const res = await metaFetch<MetaAd[]>(`/${actId}/ads`, token, {
-    fields: "id,name,status,effective_status,creative{id,object_story_spec,asset_feed_spec,image_url,image_hash,thumbnail_url,video_id,call_to_action_type,link_url,instagram_actor_id,object_type,effective_object_story_id},adset_id,campaign_id,tracking_specs,preview_shareable_link",
+    fields: "id,name,status,effective_status,creative{id,object_story_spec,asset_feed_spec,image_url,image_hash,thumbnail_url,video_id,call_to_action_type,link_url,instagram_actor_id,object_type,effective_object_story_id,url_tags},adset_id,campaign_id,tracking_specs,preview_shareable_link",
     limit: String(limit),
   });
 

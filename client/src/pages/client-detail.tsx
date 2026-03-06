@@ -273,9 +273,9 @@ export default function ClientDetailPage() {
 
 function adsManagerUrl(accountId: string, type: "ad" | "adset" | "campaign", entityId: string): string {
   const actNum = accountId.replace("act_", "");
-  if (type === "ad") return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
-  if (type === "adset") return `https://adsmanager.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
-  return `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
+  if (type === "ad") return `https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
+  if (type === "adset") return `https://www.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
+  return `https://www.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
 }
 
 function IssueCard({ issue, metaAccountId }: { issue: ScanIssue; metaAccountId?: string }) {
@@ -570,11 +570,24 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
             )}
 
             <div className="space-y-2">
-              {urls.map((entry, idx) => (
+              {urls.map((entry: any, idx: number) => (
                 <div key={idx} className="p-3 rounded-md border text-xs space-y-1" data-testid={`card-url-${idx}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{entry.adName}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-sm truncate">{entry.adName}</p>
+                        {entry.sourceType && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded border bg-muted text-muted-foreground shrink-0">
+                            {entry.sourceType === "shared_post" ? "Shared Post" :
+                             entry.sourceType === "link_url" ? "Link" :
+                             entry.sourceType === "link_data" ? "Link Data" :
+                             entry.sourceType === "video_data" ? "Video" :
+                             entry.sourceType === "carousel" ? "Carousel" :
+                             entry.sourceType === "asset_feed" ? "Dynamic" :
+                             entry.sourceType}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-muted-foreground font-mono break-all mt-0.5">{entry.destinationUrl}</p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
@@ -591,7 +604,7 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
                   </div>
                   <div className="flex items-center gap-3 text-muted-foreground flex-wrap">
                     <span>Status: {entry.effectiveStatus}</span>
-                    <a href={`https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entry.adId}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-url-ad-${idx}`}>
+                    <a href={`https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entry.adId}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-url-ad-${idx}`}>
                       Open in Ads Manager <ExternalLink className="h-2.5 w-2.5" />
                     </a>
                     {entry.previewUrl && (
@@ -600,14 +613,20 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
                       </a>
                     )}
                   </div>
-                  {entry.hasUtm && Object.keys(entry.utmParams).length > 0 && (
+                  {entry.hasUtm && Object.keys(entry.utmParams || {}).length > 0 && (
                     <details className="mt-1">
                       <summary className="cursor-pointer text-muted-foreground hover:text-foreground">UTM Parameters</summary>
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {Object.entries(entry.utmParams).map(([k, v]) => (
-                          <span key={k} className="font-mono bg-muted px-1.5 py-0.5 rounded">{k}={v}</span>
+                        {Object.entries(entry.utmParams).map(([k, v]: [string, any]) => (
+                          <span key={k} className="font-mono bg-muted px-1.5 py-0.5 rounded">{k}={String(v)}</span>
                         ))}
                       </div>
+                    </details>
+                  )}
+                  {entry.urlTags && !entry.hasUtm && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">URL Tags</summary>
+                      <p className="mt-1 font-mono bg-muted px-2 py-1 rounded break-all">{entry.urlTags}</p>
                     </details>
                   )}
                 </div>
@@ -654,7 +673,7 @@ function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: nu
           <div>
             <p className="font-medium" data-testid={`text-account-name-${account.id}`}>{account.accountName}</p>
             <p className="text-xs text-muted-foreground font-mono" data-testid={`text-account-id-${account.id}`}>
-              <a href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actNum}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-ads-manager-${account.id}`}>
+              <a href={`https://www.facebook.com/adsmanager/manage/campaigns?act=${actNum}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-ads-manager-${account.id}`}>
                 {account.accountId} <ExternalLink className="h-2.5 w-2.5" />
               </a>
             </p>

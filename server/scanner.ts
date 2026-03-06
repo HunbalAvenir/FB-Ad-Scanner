@@ -666,8 +666,10 @@ export interface AdUrlEntry {
   domain: string;
   hasUtm: boolean;
   utmParams: Record<string, string>;
+  urlTags?: string;
   previewUrl?: string;
   effectiveStatus: string;
+  sourceType: "link_url" | "link_data" | "video_data" | "carousel" | "shared_post" | "asset_feed";
 }
 
 export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdUrlEntry[]; error?: string }> {
@@ -712,19 +714,67 @@ export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdU
     if (!creative) continue;
 
     const spec = creative.object_story_spec;
-    const possibleUrls: string[] = [];
+    const urlSources: Array<{ url: string; sourceType: AdUrlEntry["sourceType"] }> = [];
 
-    if (creative.link_url) possibleUrls.push(creative.link_url);
-    if (spec?.link_data?.link) possibleUrls.push(spec.link_data.link);
-    if (spec?.video_data?.link) possibleUrls.push(spec.video_data.link);
+    if (creative.link_url) {
+      urlSources.push({ url: creative.link_url, sourceType: "link_url" });
+    }
+    if (spec?.link_data?.link) {
+      urlSources.push({ url: spec.link_data.link, sourceType: "link_data" });
+    }
+    if (spec?.video_data?.link) {
+      urlSources.push({ url: spec.video_data.link, sourceType: "video_data" });
+    }
     if (spec?.link_data?.child_attachments) {
       for (const child of spec.link_data.child_attachments) {
-        if (child.link) possibleUrls.push(child.link);
+        if (child.link) urlSources.push({ url: child.link, sourceType: "carousel" });
+      }
+    }
+    if (creative.asset_feed_spec?.link_urls) {
+      for (const linkObj of creative.asset_feed_spec.link_urls) {
+        const linkUrl = typeof linkObj === "string" ? linkObj : linkObj?.website_url;
+        if (linkUrl) urlSources.push({ url: linkUrl, sourceType: "asset_feed" });
       }
     }
 
+    if (urlSources.length === 0 && creative.effective_object_story_id) {
+      const postId = creative.effective_object_story_id;
+      const pageId = postId.split("_")[0];
+      const postUrl = `https://www.facebook.com/${pageId}/posts/${postId.split("_")[1]}`;
+      const urlTagsStr = creative.url_tags || "";
+      const utmFromTags: Record<string, string> = {};
+      const hasUtmInTags = urlTagsStr.includes("utm_");
+
+      if (urlTagsStr) {
+        try {
+          const tagParams = new URLSearchParams(urlTagsStr);
+          for (const [key, val] of tagParams.entries()) {
+            if (key.startsWith("utm_")) {
+              utmFromTags[key] = val;
+            }
+          }
+        } catch {}
+      }
+
+      urls.push({
+        adId: ad.id,
+        adName: ad.name,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+        destinationUrl: postUrl,
+        domain: "facebook.com (shared post)",
+        hasUtm: hasUtmInTags,
+        utmParams: utmFromTags,
+        urlTags: urlTagsStr || undefined,
+        previewUrl: ad.preview_shareable_link,
+        effectiveStatus: ad.effective_status,
+        sourceType: "shared_post",
+      });
+      continue;
+    }
+
     const seen = new Set<string>();
-    for (const rawUrl of possibleUrls) {
+    for (const { url: rawUrl, sourceType } of urlSources) {
       if (seen.has(rawUrl)) continue;
       seen.add(rawUrl);
 
@@ -737,6 +787,8 @@ export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdU
           }
         }
 
+        const urlTagsUtm = creative.url_tags?.includes("utm_") || false;
+
         urls.push({
           adId: ad.id,
           adName: ad.name,
@@ -744,10 +796,12 @@ export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdU
           campaignId: ad.campaign_id,
           destinationUrl: rawUrl,
           domain: parsed.hostname.replace("www.", ""),
-          hasUtm: Object.keys(utmParams).length > 0,
+          hasUtm: Object.keys(utmParams).length > 0 || urlTagsUtm,
           utmParams,
+          urlTags: creative.url_tags || undefined,
           previewUrl: ad.preview_shareable_link,
           effectiveStatus: ad.effective_status,
+          sourceType,
         });
       } catch {
         urls.push({
@@ -761,6 +815,7 @@ export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdU
           utmParams: {},
           previewUrl: ad.preview_shareable_link,
           effectiveStatus: ad.effective_status,
+          sourceType,
         });
       }
     }

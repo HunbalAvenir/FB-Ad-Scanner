@@ -12,9 +12,9 @@ import type { ScanIssue, Client, AdAccount } from "@shared/schema";
 
 function adsManagerUrl(accountId: string, type: "ad" | "adset" | "campaign", entityId: string): string {
   const actNum = accountId.replace("act_", "");
-  if (type === "ad") return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
-  if (type === "adset") return `https://adsmanager.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
-  return `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
+  if (type === "ad") return `https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
+  if (type === "adset") return `https://www.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
+  return `https://www.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
 }
 
 export default function IssuesPage() {
