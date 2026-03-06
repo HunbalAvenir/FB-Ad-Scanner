@@ -26,15 +26,15 @@ export const TYPE_LABELS: Record<string, string> = {
 };
 
 export const OBJECTIVE_LABELS: Record<string, string> = {
-  OUTCOME_LEADS: "Lead Generation",
-  OUTCOME_SALES: "Sales",
+  OUTCOME_LEADS: "Lead Gen",
+  OUTCOME_SALES: "Conversions (Sales)",
   OUTCOME_TRAFFIC: "Traffic",
   OUTCOME_AWARENESS: "Awareness",
   OUTCOME_ENGAGEMENT: "Engagement",
   OUTCOME_APP_PROMOTION: "App Promotion",
-  CONVERSIONS: "Conversions",
+  CONVERSIONS: "Conversions (Sales)",
   LINK_CLICKS: "Traffic",
-  LEAD_GENERATION: "Lead Generation",
+  LEAD_GENERATION: "Lead Gen",
   BRAND_AWARENESS: "Awareness",
   REACH: "Reach",
   POST_ENGAGEMENT: "Engagement",
