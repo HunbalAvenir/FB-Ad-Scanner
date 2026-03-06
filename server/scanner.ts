@@ -35,6 +35,7 @@ interface Finding {
   adId?: string;
   adsetId?: string;
   campaignId?: string;
+  previewUrl?: string;
 }
 
 const FEED_PLACEMENTS = ["feed", "facebook_feed", "instagram_feed", "marketplace"];
@@ -171,18 +172,19 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
     if (!creative) continue;
 
     const placements = getAdPlacements(ad, adsetMap);
+    const adPreviewUrl = ad.preview_shareable_link || undefined;
 
     const aiFindings = checkAiToggles(ad, creative, client);
-    findings.push(...aiFindings);
+    findings.push(...aiFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
 
     const placementFindings = await checkPlacementFit(ad, creative, placements, client);
-    findings.push(...placementFindings);
+    findings.push(...placementFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
 
     const creativeFindings = checkCreativeIntegrity(ad, creative, client, pages);
-    findings.push(...creativeFindings);
+    findings.push(...creativeFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
 
     const trackingFindings = checkTracking(ad, creative, client);
-    findings.push(...trackingFindings);
+    findings.push(...trackingFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
   }
 
   await storage.deleteIssuesByAdAccount(adAccount.id);
@@ -204,6 +206,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
       adId: finding.adId,
       adsetId: finding.adsetId,
       campaignId: finding.campaignId,
+      previewUrl: finding.previewUrl,
       status: "open",
       routeTo: "buyer",
     };
@@ -652,6 +655,118 @@ export async function scanAllAccounts(): Promise<ScanResult[]> {
   }
 
   return results;
+}
+
+export interface AdUrlEntry {
+  adId: string;
+  adName: string;
+  adsetId?: string;
+  campaignId?: string;
+  destinationUrl: string;
+  domain: string;
+  hasUtm: boolean;
+  utmParams: Record<string, string>;
+  previewUrl?: string;
+  effectiveStatus: string;
+}
+
+export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdUrlEntry[]; error?: string }> {
+  const account = await storage.getAdAccount(adAccountId);
+  if (!account) throw new Error("Ad account not found");
+
+  const client = await storage.getClient(account.clientId);
+  if (!client) throw new Error("Client not found");
+
+  const credentials = await storage.getCredentials(client.id);
+  let activeCredential = credentials.find(c => c.status === "active");
+
+  if (!activeCredential && process.env.META_SYSTEM_USER_TOKEN) {
+    activeCredential = {
+      id: 0,
+      clientId: client.id,
+      credentialType: "system_user_token",
+      tokenOwner: "env_system_user",
+      scopesGranted: ["ads_read", "pages_read_engagement"],
+      status: "active",
+      lastValidatedAt: new Date(),
+      expiresAt: null,
+      createdAt: new Date(),
+    } as any;
+  }
+
+  if (!activeCredential) {
+    return { urls: [], error: "No active credential for this client." };
+  }
+
+  const token = resolveToken(activeCredential);
+  const adsResult = await getAds(account.accountId, token);
+
+  if (adsResult.error || !adsResult.ads) {
+    return { urls: [], error: adsResult.error || "Failed to fetch ads" };
+  }
+
+  const urls: AdUrlEntry[] = [];
+
+  for (const ad of adsResult.ads) {
+    const creative = ad.creative;
+    if (!creative) continue;
+
+    const spec = creative.object_story_spec;
+    const possibleUrls: string[] = [];
+
+    if (creative.link_url) possibleUrls.push(creative.link_url);
+    if (spec?.link_data?.link) possibleUrls.push(spec.link_data.link);
+    if (spec?.video_data?.link) possibleUrls.push(spec.video_data.link);
+    if (spec?.link_data?.child_attachments) {
+      for (const child of spec.link_data.child_attachments) {
+        if (child.link) possibleUrls.push(child.link);
+      }
+    }
+
+    const seen = new Set<string>();
+    for (const rawUrl of possibleUrls) {
+      if (seen.has(rawUrl)) continue;
+      seen.add(rawUrl);
+
+      try {
+        const parsed = new URL(rawUrl);
+        const utmParams: Record<string, string> = {};
+        for (const [key, val] of parsed.searchParams.entries()) {
+          if (key.startsWith("utm_")) {
+            utmParams[key] = val;
+          }
+        }
+
+        urls.push({
+          adId: ad.id,
+          adName: ad.name,
+          adsetId: ad.adset_id,
+          campaignId: ad.campaign_id,
+          destinationUrl: rawUrl,
+          domain: parsed.hostname.replace("www.", ""),
+          hasUtm: Object.keys(utmParams).length > 0,
+          utmParams,
+          previewUrl: ad.preview_shareable_link,
+          effectiveStatus: ad.effective_status,
+        });
+      } catch {
+        urls.push({
+          adId: ad.id,
+          adName: ad.name,
+          adsetId: ad.adset_id,
+          campaignId: ad.campaign_id,
+          destinationUrl: rawUrl,
+          domain: "INVALID_URL",
+          hasUtm: false,
+          utmParams: {},
+          previewUrl: ad.preview_shareable_link,
+          effectiveStatus: ad.effective_status,
+        });
+      }
+    }
+  }
+
+  return { urls };
 }
 
 export async function scanSingleAccount(adAccountId: number): Promise<ScanResult> {

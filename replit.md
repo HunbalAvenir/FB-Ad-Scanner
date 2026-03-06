@@ -29,9 +29,9 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 ## Key Pages
 - `/` - Dashboard with stats (blockers/high/medium counts), degraded accounts, recent issues, client overview
 - `/clients` - Client list with add client dialog
-- `/clients/:id` - Client detail with tabs: Accounts (per-account scan button), Credentials, Issues (with recommendedFix), Onboarding
+- `/clients/:id` - Client detail with tabs: Accounts (per-account scan + URL audit buttons), Credentials, Issues (with Ads Manager links, preview links, recommendedFix), Onboarding
 - `/ad-accounts` - All ad accounts with coverage visualization
-- `/issues` - Issue tracker with Open/In Progress/Closed tabs, severity badges, rule IDs, evidence
+- `/issues` - Issue tracker with Open/In Progress/Closed tabs, severity badges, rule IDs, evidence, Ads Manager deep links (Campaign/Ad Set/Ad), ad preview links
 - `/credentials` - All credentials with scope and expiry info
 
 ## Meta API Integration
@@ -40,6 +40,9 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 - Token resolution: META_SYSTEM_USER_TOKEN env var as fallback for system_user_token credentials
 - Ad account IDs auto-prefixed with `act_`
 - Scan routes: `POST /api/scan/all`, `POST /api/scan/account/:id`, `POST /api/validate-token`
+- URL audit route: `GET /api/ad-accounts/:id/urls` — returns all destination URLs found in the account's ads with domain, UTM parameters, and Ads Manager links
+- Issues store `previewUrl` from Meta's `preview_shareable_link` field
+- Ads Manager deep links use format: `https://adsmanager.facebook.com/adsmanager/manage/{type}?act={actNum}&selected_{type}_ids={id}`
 
 ## Key Files
 - `shared/schema.ts` - All Drizzle schemas and Zod validators

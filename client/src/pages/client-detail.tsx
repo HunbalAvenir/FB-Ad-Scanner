@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, CheckCircle2, FileText, Download, Scan, Loader2 } from "lucide-react";
+import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe } from "lucide-react";
 import { useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -212,9 +212,10 @@ export default function ClientDetailPage() {
               </CardContent>
             </Card>
           ) : (
-            clientIssues.map(issue => (
-              <IssueCard key={issue.id} issue={issue} />
-            ))
+            clientIssues.map(issue => {
+              const acct = accounts?.find(a => a.id === issue.adAccountId);
+              return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} />;
+            })
           )}
         </TabsContent>
 
@@ -270,7 +271,14 @@ export default function ClientDetailPage() {
   );
 }
 
-function IssueCard({ issue }: { issue: ScanIssue }) {
+function adsManagerUrl(accountId: string, type: "ad" | "adset" | "campaign", entityId: string): string {
+  const actNum = accountId.replace("act_", "");
+  if (type === "ad") return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
+  if (type === "adset") return `https://adsmanager.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
+  return `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
+}
+
+function IssueCard({ issue, metaAccountId }: { issue: ScanIssue; metaAccountId?: string }) {
   const { toast } = useToast();
   const mutation = useMutation({
     mutationFn: async (newStatus: string) => {
@@ -310,6 +318,28 @@ function IssueCard({ issue }: { issue: ScanIssue }) {
             {issue.recommendedFix && (
               <p className="text-xs text-primary mt-1">{issue.recommendedFix}</p>
             )}
+            <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground flex-wrap">
+              {issue.campaignId && metaAccountId && (
+                <a href={adsManagerUrl(metaAccountId, "campaign", issue.campaignId)} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-campaign-${issue.id}`}>
+                  Campaign <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+              )}
+              {issue.adsetId && metaAccountId && (
+                <a href={adsManagerUrl(metaAccountId, "adset", issue.adsetId)} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-adset-${issue.id}`}>
+                  Ad Set <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+              )}
+              {issue.adId && metaAccountId && (
+                <a href={adsManagerUrl(metaAccountId, "ad", issue.adId)} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-ad-${issue.id}`}>
+                  Ad <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+              )}
+              {issue.previewUrl && (
+                <a href={issue.previewUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5 text-primary" data-testid={`link-preview-${issue.id}`}>
+                  <Eye className="h-2.5 w-2.5" /> Preview
+                </a>
+              )}
+            </div>
             {issue.evidence && typeof issue.evidence === "object" && Object.keys(issue.evidence as Record<string, any>).length > 0 && (
               <details className="mt-2 text-xs">
                 <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Evidence</summary>
@@ -466,6 +496,130 @@ function AddCredentialDialog({ clientId }: { clientId: number }) {
   );
 }
 
+interface AdUrlEntry {
+  adId: string;
+  adName: string;
+  adsetId?: string;
+  campaignId?: string;
+  destinationUrl: string;
+  domain: string;
+  hasUtm: boolean;
+  utmParams: Record<string, string>;
+  previewUrl?: string;
+  effectiveStatus: string;
+}
+
+function UrlAuditDialog({ account }: { account: AdAccount }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useQuery<{ urls: AdUrlEntry[]; error?: string }>({
+    queryKey: [`/api/ad-accounts/${account.id}/urls`],
+    enabled: open,
+  });
+
+  const urls = data?.urls || [];
+  const domains = [...new Set(urls.map(u => u.domain))];
+  const invalidUrls = urls.filter(u => u.domain === "INVALID_URL");
+  const missingUtm = urls.filter(u => !u.hasUtm);
+  const actNum = account.accountId.replace("act_", "");
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" data-testid={`button-audit-urls-${account.id}`}>
+          <Link2 className="h-3 w-3 mr-1" /> URLs
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>URL Audit: {account.accountName}</DialogTitle>
+        </DialogHeader>
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-8" />
+            <Skeleton className="h-8" />
+            <Skeleton className="h-8" />
+          </div>
+        ) : data?.error ? (
+          <div className="p-4 text-sm text-destructive bg-destructive/5 rounded-md">{data.error}</div>
+        ) : urls.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4">No destination URLs found in this account's ads.</p>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center gap-4 text-sm">
+              <span data-testid="text-url-total">{urls.length} URL{urls.length !== 1 ? "s" : ""} found</span>
+              <span>{domains.length} domain{domains.length !== 1 ? "s" : ""}</span>
+              {invalidUrls.length > 0 && (
+                <span className="text-destructive font-medium">{invalidUrls.length} invalid</span>
+              )}
+              {missingUtm.length > 0 && (
+                <span className="text-yellow-600 font-medium">{missingUtm.length} missing UTM</span>
+              )}
+            </div>
+
+            {domains.length > 1 && (
+              <div className="p-3 rounded-md bg-muted">
+                <p className="text-xs font-medium mb-1">Domains in use:</p>
+                <div className="flex flex-wrap gap-2">
+                  {domains.map(d => (
+                    <span key={d} className={`text-xs px-2 py-0.5 rounded-full border ${d === "INVALID_URL" ? "border-destructive text-destructive" : "border-border"}`} data-testid={`text-domain-${d}`}>
+                      <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {urls.map((entry, idx) => (
+                <div key={idx} className="p-3 rounded-md border text-xs space-y-1" data-testid={`card-url-${idx}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm truncate">{entry.adName}</p>
+                      <p className="text-muted-foreground font-mono break-all mt-0.5">{entry.destinationUrl}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {entry.domain === "INVALID_URL" && (
+                        <span className="text-destructive font-medium px-1.5 py-0.5 bg-destructive/10 rounded">Invalid</span>
+                      )}
+                      {!entry.hasUtm && entry.domain !== "INVALID_URL" && (
+                        <span className="text-yellow-600 font-medium px-1.5 py-0.5 bg-yellow-100 dark:bg-yellow-900/20 rounded">No UTM</span>
+                      )}
+                      {entry.hasUtm && (
+                        <span className="text-primary font-medium px-1.5 py-0.5 bg-primary/10 rounded">UTM OK</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 text-muted-foreground flex-wrap">
+                    <span>Status: {entry.effectiveStatus}</span>
+                    <a href={`https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entry.adId}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-url-ad-${idx}`}>
+                      Open in Ads Manager <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                    {entry.previewUrl && (
+                      <a href={entry.previewUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5 text-primary" data-testid={`link-url-preview-${idx}`}>
+                        <Eye className="h-2.5 w-2.5" /> Preview
+                      </a>
+                    )}
+                  </div>
+                  {entry.hasUtm && Object.keys(entry.utmParams).length > 0 && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">UTM Parameters</summary>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {Object.entries(entry.utmParams).map(([k, v]) => (
+                          <span key={k} className="font-mono bg-muted px-1.5 py-0.5 rounded">{k}={v}</span>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: number }) {
   const { toast } = useToast();
   const scanMutation = useMutation({
@@ -491,15 +645,22 @@ function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: nu
     },
   });
 
+  const actNum = account.accountId.replace("act_", "");
+
   return (
     <Card data-testid={`card-ad-account-${account.id}`}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div>
             <p className="font-medium" data-testid={`text-account-name-${account.id}`}>{account.accountName}</p>
-            <p className="text-xs text-muted-foreground font-mono" data-testid={`text-account-id-${account.id}`}>{account.accountId}</p>
+            <p className="text-xs text-muted-foreground font-mono" data-testid={`text-account-id-${account.id}`}>
+              <a href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actNum}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-ads-manager-${account.id}`}>
+                {account.accountId} <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            </p>
           </div>
           <div className="flex items-center gap-2">
+            <UrlAuditDialog account={account} />
             <Button
               variant="outline"
               size="sm"

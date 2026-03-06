@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertClientSchema, insertCredentialSchema, insertAdAccountSchema, insertScanIssueSchema } from "@shared/schema";
-import { scanAllAccounts, scanSingleAccount } from "./scanner";
+import { scanAllAccounts, scanSingleAccount, auditAccountUrls } from "./scanner";
 import { validateToken, smokeTestAdAccount } from "./meta-api";
 
 export async function registerRoutes(
@@ -145,6 +145,15 @@ export async function registerRoutes(
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/ad-accounts/:id/urls", async (req, res) => {
+    try {
+      const result = await auditAccountUrls(Number(req.params.id));
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ urls: [], error: err.message });
     }
   });
 

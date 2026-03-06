@@ -4,11 +4,18 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertOctagon, AlertTriangle, CheckCircle2, Info, ExternalLink, Wrench } from "lucide-react";
+import { AlertOctagon, AlertTriangle, CheckCircle2, Info, ExternalLink, Wrench, Eye } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
 import type { ScanIssue, Client, AdAccount } from "@shared/schema";
+
+function adsManagerUrl(accountId: string, type: "ad" | "adset" | "campaign", entityId: string): string {
+  const actNum = accountId.replace("act_", "");
+  if (type === "ad") return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
+  if (type === "adset") return `https://adsmanager.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
+  return `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
+}
 
 export default function IssuesPage() {
   const { data: issues, isLoading } = useQuery<ScanIssue[]>({ queryKey: ["/api/issues"] });
@@ -59,6 +66,7 @@ export default function IssuesPage() {
         {list.map(issue => {
           const client = clients?.find(c => c.id === issue.clientId);
           const account = accounts?.find(a => a.id === issue.adAccountId);
+          const actId = account?.accountId || "";
           return (
             <Card key={issue.id} data-testid={`card-issue-${issue.id}`}>
               <CardContent className="p-4">
@@ -91,9 +99,26 @@ export default function IssuesPage() {
                         </Link>
                       )}
                       {account && <span className="font-mono">{account.accountName}</span>}
-                      {issue.campaignId && <span>Campaign: {issue.campaignId}</span>}
-                      {issue.adsetId && <span>Ad Set: {issue.adsetId}</span>}
-                      {issue.adId && <span>Ad: {issue.adId}</span>}
+                      {issue.campaignId && actId && (
+                        <a href={adsManagerUrl(actId, "campaign", issue.campaignId)} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-campaign-${issue.id}`}>
+                          Campaign <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      )}
+                      {issue.adsetId && actId && (
+                        <a href={adsManagerUrl(actId, "adset", issue.adsetId)} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-adset-${issue.id}`}>
+                          Ad Set <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      )}
+                      {issue.adId && actId && (
+                        <a href={adsManagerUrl(actId, "ad", issue.adId)} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-ad-${issue.id}`}>
+                          Ad <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      )}
+                      {issue.previewUrl && (
+                        <a href={issue.previewUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5 text-primary" data-testid={`link-preview-${issue.id}`}>
+                          <Eye className="h-2.5 w-2.5" /> Preview
+                        </a>
+                      )}
                     </div>
                     {issue.evidence && typeof issue.evidence === "object" && Object.keys(issue.evidence as Record<string, any>).length > 0 && (
                       <details className="mt-2 text-xs">

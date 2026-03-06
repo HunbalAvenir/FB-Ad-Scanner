@@ -78,6 +78,7 @@ export const scanIssues = pgTable("scan_issues", {
   adId: text("ad_id"),
   adsetId: text("adset_id"),
   campaignId: text("campaign_id"),
+  previewUrl: text("preview_url"),
   status: text("status", { enum: ["open", "acknowledged", "resolved", "dismissed"] }).notNull().default("open"),
   routeTo: text("route_to", { enum: ["ops", "account_manager", "buyer", "client"] }).notNull().default("buyer"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
