@@ -474,10 +474,24 @@ export async function scanSingleAccount(adAccountId: number): Promise<ScanResult
   if (!client) throw new Error("Client not found");
 
   const credentials = await storage.getCredentials(client.id);
-  const activeCredential = credentials.find(c => c.status === "active");
+  let activeCredential = credentials.find(c => c.status === "active");
+
+  if (!activeCredential && process.env.META_SYSTEM_USER_TOKEN) {
+    activeCredential = {
+      id: 0,
+      clientId: client.id,
+      credentialType: "system_user_token",
+      tokenOwner: "env_system_user",
+      scopesGranted: ["ads_read", "pages_read_engagement"],
+      status: "active",
+      lastValidatedAt: new Date(),
+      expiresAt: null,
+      createdAt: new Date(),
+    } as any;
+  }
 
   if (!activeCredential) {
-    throw new Error("No active credential for this client");
+    throw new Error("No active credential for this client. Add a credential or set META_SYSTEM_USER_TOKEN.");
   }
 
   return scanAdAccount(account, activeCredential, client);

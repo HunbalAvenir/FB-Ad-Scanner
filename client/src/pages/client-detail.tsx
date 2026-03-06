@@ -330,9 +330,10 @@ function AddAdAccountDialog({ clientId }: { clientId: number }) {
 
   const mutation = useMutation({
     mutationFn: async () => {
+      const normalizedId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
       await apiRequest("POST", "/api/ad-accounts", {
         clientId,
-        accountId,
+        accountId: normalizedId,
         accountName,
         status: "pending",
       });
