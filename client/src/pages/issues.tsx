@@ -11,17 +11,13 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
 import type { ScanIssue, Client, AdAccount } from "@shared/schema";
+import { ruleLabel, typeLabel, objectiveLabel } from "@/lib/labels";
 
 function adsManagerUrl(accountId: string, type: "ad" | "adset" | "campaign", entityId: string): string {
   const actNum = accountId.replace("act_", "");
   if (type === "ad") return `https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
   if (type === "adset") return `https://www.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
   return `https://www.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
-}
-
-function formatObjective(obj: string | null | undefined): string {
-  if (!obj) return "";
-  return obj.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
 export default function IssuesPage() {
@@ -226,13 +222,13 @@ export default function IssuesPage() {
                       <StatusBadge status={issue.severity} />
                       <StatusBadge status={issue.issueType} />
                       {issue.ruleId && (
-                        <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`}>
-                          {issue.ruleId}
+                        <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`} title={issue.ruleId}>
+                          {ruleLabel(issue.ruleId)}
                         </span>
                       )}
                       {objective && (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" data-testid={`text-objective-${issue.id}`}>
-                          {formatObjective(objective)}
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" data-testid={`text-objective-${issue.id}`} title={objective}>
+                          {objectiveLabel(objective)}
                         </span>
                       )}
                       {(issue.status === "resolved" || issue.status === "dismissed") && (
@@ -355,24 +351,24 @@ export default function IssuesPage() {
             </SelectContent>
           </Select>
           <Select value={filterType} onValueChange={setFilterType}>
-            <SelectTrigger className="w-[140px] h-8 text-xs" data-testid="filter-type">
+            <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="filter-type">
               <SelectValue placeholder="Type" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
               {filterOptions.types.map(t => (
-                <SelectItem key={t} value={t}>{t.replace(/_/g, " ")}</SelectItem>
+                <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Select value={filterRule} onValueChange={setFilterRule}>
-            <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="filter-rule">
+            <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="filter-rule">
               <SelectValue placeholder="Rule" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Rules</SelectItem>
               {filterOptions.rules.map(r => (
-                <SelectItem key={r} value={r}>{r}</SelectItem>
+                <SelectItem key={r} value={r}>{ruleLabel(r)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -395,7 +391,7 @@ export default function IssuesPage() {
               <SelectContent>
                 <SelectItem value="all">All Objectives</SelectItem>
                 {filterOptions.objectives.map(o => (
-                  <SelectItem key={o} value={o}>{formatObjective(o)}</SelectItem>
+                  <SelectItem key={o} value={o}>{objectiveLabel(o)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

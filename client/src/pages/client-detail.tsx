@@ -15,6 +15,7 @@ import { useState, useMemo } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Client, AdAccount, Credential, ScanIssue } from "@shared/schema";
+import { ruleLabel, typeLabel, objectiveLabel } from "@/lib/labels";
 
 export default function ClientDetailPage() {
   const [, params] = useRoute("/clients/:id");
@@ -85,8 +86,6 @@ export default function ClientDetailPage() {
   const filteredOpen = applyIssueFilters(openIssues);
   const filteredAcknowledged = applyIssueFilters(acknowledgedIssues);
   const filteredClosed = applyIssueFilters(closedIssues);
-
-  const formatObjective = (obj: string) => obj.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
   if (isLoading) {
     return (
@@ -289,24 +288,24 @@ export default function ClientDetailPage() {
                   </SelectContent>
                 </Select>
                 <Select value={filterType} onValueChange={setFilterType}>
-                  <SelectTrigger className="w-[140px] h-8 text-xs" data-testid="filter-issue-type">
+                  <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="filter-issue-type">
                     <SelectValue placeholder="Type" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Types</SelectItem>
                     {issueFilterOptions.types.map(t => (
-                      <SelectItem key={t} value={t}>{t.replace(/_/g, " ")}</SelectItem>
+                      <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <Select value={filterRule} onValueChange={setFilterRule}>
-                  <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="filter-issue-rule">
+                  <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="filter-issue-rule">
                     <SelectValue placeholder="Rule" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Rules</SelectItem>
                     {issueFilterOptions.rules.map(r => (
-                      <SelectItem key={r} value={r}>{r}</SelectItem>
+                      <SelectItem key={r} value={r}>{ruleLabel(r)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -318,7 +317,7 @@ export default function ClientDetailPage() {
                     <SelectContent>
                       <SelectItem value="all">All Objectives</SelectItem>
                       {issueFilterOptions.objectives.map(o => (
-                        <SelectItem key={o} value={o}>{formatObjective(o)}</SelectItem>
+                        <SelectItem key={o} value={o}>{objectiveLabel(o)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -504,7 +503,6 @@ function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; meta
   };
 
   const objective = (issue as any).campaignObjective;
-  const formatObjective = (obj: string) => obj.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
   return (
     <Card data-testid={`card-issue-${issue.id}`}>
@@ -515,13 +513,13 @@ function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; meta
               <StatusBadge status={issue.severity} />
               <StatusBadge status={issue.status} />
               {issue.ruleId && (
-                <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`}>
-                  {issue.ruleId}
+                <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`} title={issue.ruleId}>
+                  {ruleLabel(issue.ruleId)}
                 </span>
               )}
               {objective && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" data-testid={`text-objective-${issue.id}`}>
-                  {formatObjective(objective)}
+                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" data-testid={`text-objective-${issue.id}`} title={objective}>
+                  {objectiveLabel(objective)}
                 </span>
               )}
               <span className="text-xs text-muted-foreground">Route: {routeLabels[issue.routeTo] || issue.routeTo}</span>
