@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Link } from "wouter";
-import { Plus, Users, ArrowRight, Download, Loader2, Search, CheckSquare, Square, AlertCircle } from "lucide-react";
+import { Plus, Users, ArrowRight, Download, Loader2, Search, AlertCircle, CheckCircle2, XCircle } from "lucide-react";
 import { useState, useMemo } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -38,6 +38,15 @@ interface MetaAccount {
   alreadyImported: boolean;
 }
 
+interface VerifiedAccount {
+  id: string;
+  name: string;
+  account_status: number;
+  accessible: boolean;
+  error?: string;
+  alreadyImported: boolean;
+}
+
 export default function ClientsPage() {
   const { data: clients, isLoading } = useQuery<Client[]>({ queryKey: ["/api/clients"] });
   const { data: accounts } = useQuery<AdAccount[]>({ queryKey: ["/api/ad-accounts"] });
@@ -56,12 +65,12 @@ export default function ClientsPage() {
           <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" data-testid="button-import-accounts">
-                <Download className="h-4 w-4 mr-1" /> Import from Meta
+                <Download className="h-4 w-4 mr-1" /> Import Accounts
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
               <DialogHeader>
-                <DialogTitle>Import Ad Accounts from Meta</DialogTitle>
+                <DialogTitle>Import Ad Accounts</DialogTitle>
               </DialogHeader>
               <BulkImportForm onSuccess={() => setImportDialogOpen(false)} />
             </DialogContent>
@@ -143,23 +152,33 @@ export default function ClientsPage() {
 
 function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
-  const [search, setSearch] = useState("");
+  const [idsInput, setIdsInput] = useState("");
+  const [verified, setVerified] = useState<VerifiedAccount[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [clientNameOverrides, setClientNameOverrides] = useState<Record<string, string>>({});
 
-  const { data: metaAccounts, isLoading, error } = useQuery<MetaAccount[]>({
-    queryKey: ["/api/meta/ad-accounts"],
-    staleTime: 60_000,
+  const verifyMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("POST", "/api/meta/verify-accounts", { accountIds: ids });
+      return res.json() as Promise<VerifiedAccount[]>;
+    },
+    onSuccess: (data) => {
+      setVerified(data);
+      const accessibleIds = data.filter(a => a.accessible && !a.alreadyImported).map(a => a.id);
+      setSelected(new Set(accessibleIds));
+    },
+    onError: (err: Error) => {
+      toast({ title: "Verification failed", description: err.message, variant: "destructive" });
+    },
   });
 
   const importMutation = useMutation({
     mutationFn: async () => {
       const accounts = Array.from(selected).map(id => {
-        const acct = metaAccounts?.find(a => a.id === id);
+        const acct = verified?.find(a => a.id === id);
         return {
           metaAccountId: id,
           accountName: acct?.name || id,
-          businessName: acct?.business_name || undefined,
           clientName: clientNameOverrides[id] || undefined,
         };
       });
@@ -181,19 +200,16 @@ function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
     },
   });
 
-  const filtered = useMemo(() => {
-    if (!metaAccounts) return [];
-    if (!search) return metaAccounts;
-    const q = search.toLowerCase();
-    return metaAccounts.filter(a =>
-      a.name.toLowerCase().includes(q) ||
-      a.id.toLowerCase().includes(q) ||
-      (a.business_name || "").toLowerCase().includes(q)
-    );
-  }, [metaAccounts, search]);
-
-  const available = filtered.filter(a => !a.alreadyImported);
-  const imported = filtered.filter(a => a.alreadyImported);
+  const handleVerify = () => {
+    const raw = idsInput.trim();
+    if (!raw) return;
+    const ids = raw
+      .split(/[\n,;\s]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+    if (ids.length === 0) return;
+    verifyMutation.mutate(ids);
+  };
 
   const toggleAccount = (id: string) => {
     setSelected(prev => {
@@ -204,67 +220,66 @@ function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
     });
   };
 
-  const selectAll = () => {
-    setSelected(new Set(available.map(a => a.id)));
-  };
-
-  const selectNone = () => {
-    setSelected(new Set());
-  };
-
-  if (isLoading) {
+  if (!verified) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 gap-3">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Fetching ad accounts from Meta...</p>
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-muted-foreground">
+          Paste ad account IDs below (one per line, comma-separated, or space-separated). The act_ prefix is optional.
+        </p>
+        <Textarea
+          placeholder={"act_123456789\n987654321\nact_111222333"}
+          value={idsInput}
+          onChange={e => setIdsInput(e.target.value)}
+          className="min-h-[140px] font-mono text-sm"
+          data-testid="input-account-ids"
+        />
+        <p className="text-xs text-muted-foreground">
+          {idsInput.trim() ? `${idsInput.trim().split(/[\n,;\s]+/).filter(s => s.trim()).length} account ID(s) entered` : "Enter at least one account ID"}
+        </p>
+        <Button
+          onClick={handleVerify}
+          disabled={!idsInput.trim() || verifyMutation.isPending}
+          className="w-full"
+          data-testid="button-verify-accounts"
+        >
+          {verifyMutation.isPending ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-1 animate-spin" /> Verifying access...
+            </>
+          ) : (
+            "Verify Access"
+          )}
+        </Button>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12 gap-3">
-        <AlertCircle className="h-6 w-6 text-destructive" />
-        <p className="text-sm text-destructive">Failed to load accounts</p>
-        <p className="text-xs text-muted-foreground">{(error as Error).message}</p>
-      </div>
-    );
-  }
+  const accessible = verified.filter(a => a.accessible && !a.alreadyImported);
+  const alreadyImported = verified.filter(a => a.alreadyImported);
+  const noAccess = verified.filter(a => !a.accessible && !a.alreadyImported);
 
   return (
     <div className="flex flex-col gap-4 min-h-0">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by name, ID, or business..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="pl-9"
-            data-testid="input-import-search"
-          />
-        </div>
-        <Button variant="ghost" size="sm" onClick={selectAll} data-testid="button-select-all">
-          Select All ({available.length})
-        </Button>
-        <Button variant="ghost" size="sm" onClick={selectNone} data-testid="button-select-none">
-          Clear
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          {verified.length} account{verified.length !== 1 ? "s" : ""} verified.
+          {accessible.length > 0 && ` ${accessible.length} accessible.`}
+          {alreadyImported.length > 0 && ` ${alreadyImported.length} already imported.`}
+          {noAccess.length > 0 && ` ${noAccess.length} no access.`}
+        </p>
+        <Button variant="ghost" size="sm" onClick={() => { setVerified(null); setSelected(new Set()); }} data-testid="button-back-to-input">
+          Back
         </Button>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        {metaAccounts?.length || 0} accounts found.
-        {imported.length > 0 && ` ${imported.length} already imported.`}
-        {selected.size > 0 && ` ${selected.size} selected.`}
-      </p>
-
       <div className="overflow-y-auto max-h-[50vh] border rounded-md divide-y">
-        {available.length === 0 && imported.length === 0 && (
+        {accessible.length === 0 && alreadyImported.length === 0 && noAccess.length === 0 && (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            {search ? "No accounts match your search." : "No ad accounts found."}
+            No results found.
           </div>
         )}
-        {available.map(acct => (
+
+        {accessible.map(acct => (
           <label
             key={acct.id}
             className={`flex items-start gap-3 p-3 cursor-pointer hover:bg-muted/50 transition-colors ${selected.has(acct.id) ? "bg-primary/5" : ""}`}
@@ -278,47 +293,61 @@ function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
             />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
+                <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0" />
                 <p className="text-sm font-medium truncate" data-testid={`text-account-name-${acct.id}`}>{acct.name}</p>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${acct.account_status === 1 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300"}`}>
-                  {ACCOUNT_STATUS_LABELS[acct.account_status] || `Status ${acct.account_status}`}
-                </span>
+                {acct.account_status > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${acct.account_status === 1 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300"}`}>
+                    {ACCOUNT_STATUS_LABELS[acct.account_status] || `Status ${acct.account_status}`}
+                  </span>
+                )}
               </div>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                <span className="font-mono">{acct.id}</span>
-                {acct.business_name && <span>{acct.business_name}</span>}
-                {acct.currency && <span>{acct.currency}</span>}
-              </div>
+              <p className="text-xs text-muted-foreground font-mono mt-0.5">{acct.id}</p>
               {selected.has(acct.id) && (
                 <div className="mt-2">
                   <Input
-                    placeholder={acct.business_name || acct.name}
+                    placeholder={acct.name}
                     value={clientNameOverrides[acct.id] || ""}
                     onChange={e => setClientNameOverrides(prev => ({ ...prev, [acct.id]: e.target.value }))}
                     className="h-7 text-xs"
                     data-testid={`input-client-name-${acct.id}`}
                   />
                   <p className="text-[10px] text-muted-foreground mt-0.5">
-                    Client name (defaults to {acct.business_name || acct.name})
+                    Client name (defaults to {acct.name})
                   </p>
                 </div>
               )}
             </div>
           </label>
         ))}
-        {imported.length > 0 && (
+
+        {alreadyImported.length > 0 && (
           <>
-            <div className="px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground sticky top-0">
+            <div className="px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
               Already imported
             </div>
-            {imported.map(acct => (
+            {alreadyImported.map(acct => (
               <div key={acct.id} className="flex items-start gap-3 p-3 opacity-50" data-testid={`row-imported-${acct.id}`}>
                 <Checkbox checked disabled className="mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm truncate">{acct.name}</p>
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                    <span className="font-mono">{acct.id}</span>
-                    {acct.business_name && <span>{acct.business_name}</span>}
-                  </div>
+                  <p className="text-xs text-muted-foreground font-mono mt-0.5">{acct.id}</p>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {noAccess.length > 0 && (
+          <>
+            <div className="px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+              No access
+            </div>
+            {noAccess.map(acct => (
+              <div key={acct.id} className="flex items-start gap-3 p-3 opacity-50" data-testid={`row-noaccess-${acct.id}`}>
+                <XCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-mono">{acct.id}</p>
+                  <p className="text-xs text-destructive mt-0.5">{acct.error || "Access denied"}</p>
                 </div>
               </div>
             ))}

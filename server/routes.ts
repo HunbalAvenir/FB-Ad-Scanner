@@ -59,6 +59,35 @@ export async function registerRoutes(
     res.json(accounts);
   });
 
+  app.post("/api/meta/verify-accounts", async (req, res) => {
+    const token = process.env.META_SYSTEM_USER_TOKEN;
+    if (!token) return res.status(500).json({ message: "META_SYSTEM_USER_TOKEN not configured" });
+
+    const schema = z.object({ accountIds: z.array(z.string().min(1)).min(1) });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+    const existingAccounts = await storage.getAllAdAccounts();
+    const existingIds = new Set(existingAccounts.map(a => a.accountId));
+
+    const results = [];
+    for (const rawId of parsed.data.accountIds) {
+      const cleanId = rawId.replace(/\s/g, "");
+      if (!cleanId) continue;
+      const actId = cleanId.startsWith("act_") ? cleanId : `act_${cleanId}`;
+      const check = await smokeTestAdAccount(actId, token);
+      results.push({
+        id: actId,
+        name: check.accountName || actId,
+        account_status: check.accountStatus || 0,
+        accessible: check.accessible,
+        error: check.error,
+        alreadyImported: existingIds.has(actId),
+      });
+    }
+    res.json(results);
+  });
+
   const bulkImportSchema = z.object({
     accounts: z.array(z.object({
       metaAccountId: z.string().min(1),
