@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge, AccessModeBadge } from "@/components/status-badge";
 import { CoverageWidget } from "@/components/coverage-widget";
 import { Link } from "wouter";
-import { Users, Radio, AlertTriangle, ShieldAlert, Activity, ArrowRight, Scan, Loader2 } from "lucide-react";
+import { Users, Radio, AlertTriangle, AlertOctagon, Activity, ArrowRight, Scan, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -16,7 +16,9 @@ export default function Dashboard() {
     activeClients: number;
     degradedAccounts: number;
     openIssues: number;
-    criticalIssues: number;
+    blockerIssues: number;
+    highIssues: number;
+    mediumIssues: number;
   }>({ queryKey: ["/api/dashboard/stats"] });
 
   const { data: clients, isLoading: clientsLoading } = useQuery<Client[]>({
@@ -56,7 +58,8 @@ export default function Dashboard() {
   const isLoading = statsLoading || clientsLoading || accountsLoading || issuesLoading;
 
   const degradedAccounts = accounts?.filter(a => a.status === "degraded" || a.status === "error") || [];
-  const criticalIssues = issues?.filter(i => i.severity === "critical" && i.status === "open") || [];
+  const blockerIssues = issues?.filter(i => i.severity === "blocker" && i.status === "open") || [];
+  const highIssues = issues?.filter(i => i.severity === "high" && i.status === "open") || [];
   const recentIssues = issues?.slice(0, 5) || [];
 
   return (
@@ -101,10 +104,10 @@ export default function Dashboard() {
         <StatCard
           title="Open Issues"
           value={stats?.openIssues}
-          subtitle={stats?.criticalIssues ? `${stats.criticalIssues} critical` : undefined}
+          subtitle={stats?.blockerIssues ? `${stats.blockerIssues} blocker${stats.blockerIssues > 1 ? "s" : ""}` : stats?.highIssues ? `${stats.highIssues} high` : undefined}
           icon={AlertTriangle}
           loading={isLoading}
-          alert={!!stats?.criticalIssues && stats.criticalIssues > 0}
+          alert={!!stats?.blockerIssues && stats.blockerIssues > 0}
           testId="stat-open-issues"
         />
       </div>
@@ -189,7 +192,7 @@ export default function Dashboard() {
                           <StatusBadge status={issue.severity} />
                           <span className="text-xs text-muted-foreground">{client?.name}</span>
                         </div>
-                        <p className="text-sm mt-1 line-clamp-1">{issue.title}</p>
+                        <p className="text-sm mt-1 line-clamp-1">{issue.message}</p>
                       </div>
                       <StatusBadge status={issue.status} />
                     </div>

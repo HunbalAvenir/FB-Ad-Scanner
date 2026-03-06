@@ -4,13 +4,11 @@ import {
   smokeTestAdAccount,
   getAds,
   getAdSets,
-  getAdCreatives,
-  getCampaigns,
   getAccountPages,
+  getImageMetadata,
   type MetaAd,
   type MetaAdSet,
-  type MetaCreative,
-  type MetaCampaign,
+  type MetaAdCreativeDetail,
 } from "./meta-api";
 import type { AdAccount, Credential, Client, InsertScanIssue } from "@shared/schema";
 import { log } from "./index";
@@ -19,10 +17,28 @@ interface ScanResult {
   accountId: number;
   success: boolean;
   issuesFound: number;
+  adsScanned: number;
   coverageUpdated: boolean;
   error?: string;
   errorCode?: string;
 }
+
+interface Finding {
+  ruleId: string;
+  severity: "blocker" | "high" | "medium" | "low";
+  category: string;
+  issueType: "ai_toggle" | "placement_fit" | "creative_integrity" | "tracking" | "access";
+  message: string;
+  whyItMatters: string;
+  recommendedFix: string;
+  evidence: Record<string, any>;
+  adId?: string;
+  adsetId?: string;
+  campaignId?: string;
+}
+
+const FEED_PLACEMENTS = ["feed", "facebook_feed", "instagram_feed", "marketplace"];
+const STORY_PLACEMENTS = ["story", "stories", "instagram_stories", "facebook_stories", "reels", "instagram_reels", "facebook_reels"];
 
 function resolveToken(credential: Credential): string {
   if (credential.credentialType === "system_user_token") {
@@ -30,6 +46,45 @@ function resolveToken(credential: Credential): string {
     if (envToken) return envToken;
   }
   return credential.tokenOwner;
+}
+
+function getAdPlacements(ad: MetaAd, adsetMap: Map<string, MetaAdSet>): { feed: boolean; story: boolean; all: string[] } {
+  const adset = ad.adset_id ? adsetMap.get(ad.adset_id) : undefined;
+  const targeting = adset?.targeting;
+  const allPositions: string[] = [];
+
+  if (targeting) {
+    if (targeting.facebook_positions) allPositions.push(...targeting.facebook_positions);
+    if (targeting.instagram_positions) allPositions.push(...targeting.instagram_positions);
+  }
+
+  const hasFeed = allPositions.some(p => FEED_PLACEMENTS.includes(p.toLowerCase()));
+  const hasStory = allPositions.some(p => STORY_PLACEMENTS.includes(p.toLowerCase()));
+
+  if (allPositions.length === 0) {
+    return { feed: true, story: true, all: ["automatic"] };
+  }
+
+  return { feed: hasFeed, story: hasStory, all: allPositions };
+}
+
+function parseAspectRatio(width: number, height: number): string {
+  if (width === 0 || height === 0) return "unknown";
+  const ratio = width / height;
+  if (Math.abs(ratio - 1) < 0.05) return "1:1";
+  if (Math.abs(ratio - 0.8) < 0.05) return "4:5";
+  if (Math.abs(ratio - 0.5625) < 0.05) return "9:16";
+  if (Math.abs(ratio - 1.91) < 0.1) return "1.91:1";
+  if (Math.abs(ratio - 1.778) < 0.05) return "16:9";
+  return `${width}:${height}`;
+}
+
+function isVertical(ratio: string): boolean {
+  return ratio === "9:16";
+}
+
+function isSquare(ratio: string): boolean {
+  return ratio === "1:1";
 }
 
 export async function scanAdAccount(adAccount: AdAccount, credential: Credential, client: Client): Promise<ScanResult> {
@@ -48,7 +103,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
       lastScanErrorCode: smokeTest.errorCode || "SMOKE_TEST_FAILED",
     });
 
-    if (credential.status === "active") {
+    if (credential.id !== 0 && credential.status === "active") {
       const tokenCheck = await validateToken(token);
       if (!tokenCheck.valid) {
         await storage.updateCredential(credential.id, {
@@ -64,6 +119,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
       accountId: adAccount.id,
       success: false,
       issuesFound: 0,
+      adsScanned: 0,
       coverageUpdated: true,
       error: smokeTest.error,
       errorCode: smokeTest.errorCode,
@@ -72,17 +128,15 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
 
   log(`Smoke test passed for ${adAccount.accountId}, pulling data...`, "scanner");
 
-  const [adsResult, adSetsResult, creativesResult, campaignsResult, pagesResult] = await Promise.all([
+  const [adsResult, adSetsResult, pagesResult] = await Promise.all([
     getAds(adAccount.accountId, token),
     getAdSets(adAccount.accountId, token),
-    getAdCreatives(adAccount.accountId, token),
-    getCampaigns(adAccount.accountId, token),
     getAccountPages(adAccount.accountId, token),
   ]);
 
   const coverageUpdate: Partial<typeof adAccount> = {
     identityChecksAvailable: !pagesResult.error && !!pagesResult.pages,
-    creativeMetadataAvailable: !creativesResult.error && !!creativesResult.creatives,
+    creativeMetadataAvailable: !adsResult.error && !!adsResult.ads,
     placementTogglesAvailable: !adSetsResult.error && !!adSetsResult.adsets,
     deliveryStatusAvailable: !adsResult.error && !!adsResult.ads,
     lastScanSuccessAt: new Date(),
@@ -92,321 +146,433 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
   };
 
   await storage.updateAdAccount(adAccount.id, coverageUpdate);
-  await storage.updateCredential(credential.id, {
-    lastValidatedAt: new Date(),
-    status: "active",
-  });
+  if (credential.id !== 0) {
+    await storage.updateCredential(credential.id, {
+      lastValidatedAt: new Date(),
+      status: "active",
+    });
+  }
+
+  const ads = adsResult.ads || [];
+  const adsets = adSetsResult.adsets || [];
+  const pages = pagesResult.pages || [];
+
+  const adsetMap = new Map<string, MetaAdSet>();
+  for (const adset of adsets) {
+    adsetMap.set(adset.id, adset);
+  }
+
+  const activeAds = ads.filter(a => a.effective_status === "ACTIVE" || a.effective_status === "PAUSED");
+
+  const findings: Finding[] = [];
+
+  for (const ad of activeAds) {
+    const creative = ad.creative;
+    if (!creative) continue;
+
+    const placements = getAdPlacements(ad, adsetMap);
+
+    const aiFindings = checkAiToggles(ad, creative, client);
+    findings.push(...aiFindings);
+
+    const placementFindings = await checkPlacementFit(ad, creative, placements, client);
+    findings.push(...placementFindings);
+
+    const creativeFindings = checkCreativeIntegrity(ad, creative, client, pages);
+    findings.push(...creativeFindings);
+
+    const trackingFindings = checkTracking(ad, creative, client);
+    findings.push(...trackingFindings);
+  }
+
+  await storage.deleteIssuesByAdAccount(adAccount.id);
 
   let issuesFound = 0;
-  const newIssues: InsertScanIssue[] = [];
-
-  if (adsResult.ads) {
-    const adIssues = analyzeAds(adsResult.ads, adAccount, client);
-    newIssues.push(...adIssues);
-  }
-
-  if (adSetsResult.adsets) {
-    const adsetIssues = analyzeAdSets(adSetsResult.adsets, adAccount, client);
-    newIssues.push(...adsetIssues);
-  }
-
-  if (creativesResult.creatives) {
-    const creativeIssues = analyzeCreatives(creativesResult.creatives, adAccount, client);
-    newIssues.push(...creativeIssues);
-  }
-
-  if (campaignsResult.campaigns) {
-    const campaignIssues = analyzeCampaigns(campaignsResult.campaigns, adAccount, client);
-    newIssues.push(...campaignIssues);
-  }
-
-  if (pagesResult.pages && client.allowedPageIds && client.allowedPageIds.length > 0) {
-    const identityIssues = analyzeIdentity(pagesResult.pages, adAccount, client);
-    newIssues.push(...identityIssues);
-  }
-
-  if (creativesResult.creatives && client.allowedDomains && client.allowedDomains.length > 0) {
-    const utmIssues = analyzeUtmAndDomains(creativesResult.creatives, adAccount, client);
-    newIssues.push(...utmIssues);
-  }
-
-  for (const issue of newIssues) {
+  for (const finding of findings) {
+    const issue: InsertScanIssue = {
+      adAccountId: adAccount.id,
+      clientId: client.id,
+      issueType: finding.issueType,
+      severity: finding.severity,
+      message: finding.message,
+      description: finding.whyItMatters,
+      ruleId: finding.ruleId,
+      category: finding.category,
+      recommendedFix: finding.recommendedFix,
+      evidence: finding.evidence,
+      whyItMatters: finding.whyItMatters,
+      adId: finding.adId,
+      adsetId: finding.adsetId,
+      campaignId: finding.campaignId,
+      status: "open",
+      routeTo: "buyer",
+    };
     await storage.createIssue(issue);
     issuesFound++;
   }
 
-  log(`Scan complete for ${adAccount.accountId}: ${issuesFound} issues found`, "scanner");
+  log(`Scan complete for ${adAccount.accountId}: ${issuesFound} issues from ${activeAds.length} ads`, "scanner");
 
   return {
     accountId: adAccount.id,
     success: true,
     issuesFound,
+    adsScanned: activeAds.length,
     coverageUpdated: true,
   };
 }
 
-function analyzeAds(ads: MetaAd[], adAccount: AdAccount, client: Client): InsertScanIssue[] {
-  const issues: InsertScanIssue[] = [];
+function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Client): Finding[] {
+  const findings: Finding[] = [];
+  const spec = creative.object_story_spec;
+  const feedSpec = creative.asset_feed_spec;
 
-  const activeAds = ads.filter(a => a.effective_status === "ACTIVE");
-  const pausedWithActiveParent = ads.filter(a => a.status === "ACTIVE" && a.effective_status !== "ACTIVE");
-  const disapprovedAds = ads.filter(a => a.effective_status === "DISAPPROVED");
+  const enhancements: Array<{ key: string; ruleId: string; label: string; severity: "high" | "medium" }> = [];
 
-  if (disapprovedAds.length > 0) {
-    issues.push({
-      adAccountId: adAccount.id,
-      clientId: client.id,
-      issueType: "creative",
-      severity: "critical",
-      title: `${disapprovedAds.length} disapproved ad${disapprovedAds.length > 1 ? "s" : ""} detected`,
-      description: `The following ads have been disapproved by Meta: ${disapprovedAds.map(a => a.name).join(", ")}. These ads are not delivering and require attention.`,
-      status: "open",
-      routeTo: "buyer",
+  if (spec) {
+    if (spec.link_data?.image_crops || spec.link_data?.multi_share_optimized) {
+      enhancements.push({ key: "advantage_creative", ruleId: "AI_001", label: "Advantage creative enhancements", severity: "high" });
+    }
+  }
+
+  if (feedSpec) {
+    if (feedSpec.ad_formats) {
+      enhancements.push({ key: "advantage_creative", ruleId: "AI_001", label: "Advantage creative enhancements", severity: "high" });
+    }
+
+    if (feedSpec.image_transformation_types?.includes("bg_gen") ||
+        feedSpec.image_transformation_types?.includes("expand")) {
+      enhancements.push({ key: "image_expansion", ruleId: "AI_002", label: "Image expansion", severity: "high" });
+    }
+
+    if (feedSpec.optimization_type === "DEGREE_OF_FREEDOM" ||
+        feedSpec.text_optimization_type) {
+      enhancements.push({ key: "auto_text", ruleId: "AI_003", label: "Auto text generation", severity: "medium" });
+    }
+
+    if (feedSpec.music_type || feedSpec.video_filtering_type) {
+      enhancements.push({ key: "auto_music_filters", ruleId: "AI_004", label: "Auto music/filters", severity: "medium" });
+    }
+  }
+
+  const seenRules = new Set<string>();
+  for (const enh of enhancements) {
+    if (seenRules.has(enh.ruleId)) continue;
+    seenRules.add(enh.ruleId);
+
+    findings.push({
+      ruleId: enh.ruleId,
+      severity: enh.severity,
+      category: "AI_TOGGLE",
+      issueType: "ai_toggle",
+      message: `${enh.label} enabled on ad "${ad.name}"`,
+      whyItMatters: "AI-modified creatives can alter your approved assets in unexpected ways, potentially misrepresenting the brand or product.",
+      recommendedFix: `Disable ${enh.label.toLowerCase()} in ad settings or add "${enh.key}" to the client's allowed enhancements list.`,
+      evidence: { enhancement_type: enh.key, ad_name: ad.name },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
     });
-  }
 
-  const adsWithoutCreative = activeAds.filter(a => !a.creative);
-  if (adsWithoutCreative.length > 0) {
-    issues.push({
-      adAccountId: adAccount.id,
-      clientId: client.id,
-      issueType: "creative",
-      severity: "warning",
-      title: `${adsWithoutCreative.length} active ad${adsWithoutCreative.length > 1 ? "s" : ""} missing creative reference`,
-      description: `Active ads without linked creative objects: ${adsWithoutCreative.map(a => a.name).join(", ")}.`,
-      status: "open",
-      routeTo: "buyer",
-    });
-  }
-
-  if (ads.length === 0) {
-    issues.push({
-      adAccountId: adAccount.id,
-      clientId: client.id,
-      issueType: "delivery",
-      severity: "info",
-      title: "No ads found in this ad account",
-      description: "This ad account has no ads. If campaigns are expected, verify the account ID is correct.",
-      status: "open",
-      routeTo: "account_manager",
-    });
-  }
-
-  return issues;
-}
-
-function analyzeAdSets(adsets: MetaAdSet[], adAccount: AdAccount, client: Client): InsertScanIssue[] {
-  const issues: InsertScanIssue[] = [];
-
-  const activeAdsets = adsets.filter(a => a.effective_status === "ACTIVE");
-
-  for (const adset of activeAdsets) {
-    if (!adset.daily_budget && !adset.lifetime_budget) {
-      issues.push({
-        adAccountId: adAccount.id,
-        clientId: client.id,
-        issueType: "delivery",
-        severity: "warning",
-        title: `Ad set "${adset.name}" has no budget set at ad set level`,
-        description: `Ad set "${adset.name}" (${adset.id}) does not have a daily or lifetime budget configured at the ad set level. Budget may be managed at campaign level (CBO).`,
-        status: "open",
-        routeTo: "buyer",
-      });
-    }
-
-    if (adset.targeting) {
-      const targeting = adset.targeting;
-      if (!targeting.geo_locations || (!targeting.geo_locations.countries && !targeting.geo_locations.regions && !targeting.geo_locations.cities)) {
-        issues.push({
-          adAccountId: adAccount.id,
-          clientId: client.id,
-          issueType: "targeting",
-          severity: "warning",
-          title: `Ad set "${adset.name}" has no geographic targeting`,
-          description: `Ad set "${adset.name}" (${adset.id}) does not have specific geographic targeting configured. This may lead to unwanted spend in unintended regions.`,
-          status: "open",
-          routeTo: "buyer",
-        });
-      }
-    }
-  }
-
-  return issues;
-}
-
-function analyzeCreatives(creatives: MetaCreative[], adAccount: AdAccount, client: Client): InsertScanIssue[] {
-  const issues: InsertScanIssue[] = [];
-
-  for (const creative of creatives) {
-    if (creative.object_story_spec) {
-      const spec = creative.object_story_spec;
-      const callToAction = spec.link_data?.call_to_action || spec.video_data?.call_to_action;
-      const link = spec.link_data?.link || spec.video_data?.link || "";
-
-      if (link && !link.startsWith("http")) {
-        issues.push({
-          adAccountId: adAccount.id,
-          clientId: client.id,
-          issueType: "creative",
-          severity: "warning",
-          title: `Creative "${creative.name || creative.id}" has malformed URL`,
-          description: `The destination URL "${link}" does not start with http/https. This may cause click-through failures.`,
-          status: "open",
-          routeTo: "buyer",
-        });
-      }
-    }
-
-    if (creative.asset_feed_spec) {
-      const feedSpec = creative.asset_feed_spec;
-      if (feedSpec.bodies && feedSpec.bodies.length > 5) {
-        issues.push({
-          adAccountId: adAccount.id,
-          clientId: client.id,
-          issueType: "creative",
-          severity: "info",
-          title: `Creative "${creative.name || creative.id}" has ${feedSpec.bodies.length} body variations`,
-          description: `Dynamic creative has a large number of body copy variations (${feedSpec.bodies.length}). Consider reviewing performance of individual variations.`,
-          status: "open",
-          routeTo: "buyer",
-        });
-      }
-    }
-  }
-
-  return issues;
-}
-
-function analyzeCampaigns(campaigns: MetaCampaign[], adAccount: AdAccount, client: Client): InsertScanIssue[] {
-  const issues: InsertScanIssue[] = [];
-
-  const activeCampaigns = campaigns.filter(c => c.effective_status === "ACTIVE");
-
-  for (const campaign of activeCampaigns) {
-    if (campaign.special_ad_categories && campaign.special_ad_categories.length > 0) {
-      issues.push({
-        adAccountId: adAccount.id,
-        clientId: client.id,
-        issueType: "delivery",
-        severity: "info",
-        title: `Campaign "${campaign.name}" uses special ad categories`,
-        description: `Campaign "${campaign.name}" (${campaign.id}) is flagged with special ad categories: ${campaign.special_ad_categories.join(", ")}. Targeting restrictions apply.`,
-        status: "open",
-        routeTo: "buyer",
+    if (client.allowedAiEnhancements && !client.allowedAiEnhancements.includes(enh.key)) {
+      findings.push({
+        ruleId: "AI_005",
+        severity: "high",
+        category: "AI_TOGGLE",
+        issueType: "ai_toggle",
+        message: `Enhancement "${enh.label}" not allowed by client policy on ad "${ad.name}"`,
+        whyItMatters: "This enhancement is not in the client's approved list. Using unapproved AI modifications could violate client agreements.",
+        recommendedFix: `Disable ${enh.label.toLowerCase()} or get client approval to add it to allowed enhancements.`,
+        evidence: {
+          enhancement_type: enh.key,
+          allowed_enhancements: client.allowedAiEnhancements || [],
+          ad_name: ad.name,
+        },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
       });
     }
   }
 
-  return issues;
+  return findings;
 }
 
-function analyzeIdentity(pages: Array<{ id: string; name: string }>, adAccount: AdAccount, client: Client): InsertScanIssue[] {
-  const issues: InsertScanIssue[] = [];
+async function checkPlacementFit(
+  ad: MetaAd,
+  creative: MetaAdCreativeDetail,
+  placements: { feed: boolean; story: boolean; all: string[] },
+  client: Client
+): Promise<Finding[]> {
+  const findings: Finding[] = [];
 
-  if (client.allowedPageIds && client.allowedPageIds.length > 0) {
-    const pageIds = pages.map(p => p.id);
-    const unauthorizedPages = pageIds.filter(id => !client.allowedPageIds!.includes(id) && !client.allowedPageIds!.includes(`page_${id}`));
+  let assetRatio: string | null = null;
+  let assetWidth = 0;
+  let assetHeight = 0;
 
-    if (unauthorizedPages.length > 0) {
-      issues.push({
-        adAccountId: adAccount.id,
-        clientId: client.id,
-        issueType: "identity",
-        severity: "warning",
-        title: `${unauthorizedPages.length} page${unauthorizedPages.length > 1 ? "s" : ""} not in approved list`,
-        description: `The following Page IDs are being used but are not in the client's approved list: ${unauthorizedPages.join(", ")}. Verify these are authorized.`,
-        status: "open",
-        routeTo: "account_manager",
-      });
-    }
-  }
-
-  return issues;
-}
-
-function analyzeUtmAndDomains(creatives: MetaCreative[], adAccount: AdAccount, client: Client): InsertScanIssue[] {
-  const issues: InsertScanIssue[] = [];
-
-  const creativesWithUrls: Array<{ name: string; url: string }> = [];
-
-  for (const creative of creatives) {
-    let url = "";
-    if (creative.object_story_spec) {
-      url = creative.object_story_spec.link_data?.link ||
-            creative.object_story_spec.video_data?.link || "";
-    }
-    if (url) {
-      creativesWithUrls.push({ name: creative.name || creative.id, url });
-    }
-  }
-
-  if (client.allowedDomains && client.allowedDomains.length > 0) {
-    const wrongDomainCreatives = creativesWithUrls.filter(c => {
-      try {
-        const hostname = new URL(c.url).hostname.replace("www.", "");
-        return !client.allowedDomains!.some(d => hostname === d || hostname.endsWith(`.${d}`));
-      } catch {
-        return false;
-      }
-    });
-
-    if (wrongDomainCreatives.length > 0) {
-      issues.push({
-        adAccountId: adAccount.id,
-        clientId: client.id,
-        issueType: "utm",
-        severity: "warning",
-        title: `${wrongDomainCreatives.length} creative${wrongDomainCreatives.length > 1 ? "s" : ""} linking to unapproved domains`,
-        description: `Creatives linking to domains not in the approved list: ${wrongDomainCreatives.map(c => `${c.name} -> ${c.url}`).join("; ")}. Approved domains: ${client.allowedDomains!.join(", ")}.`,
-        status: "open",
-        routeTo: "buyer",
-      });
-    }
-  }
-
-  const missingUtm = creativesWithUrls.filter(c => {
+  if (creative.image_url) {
     try {
-      const url = new URL(c.url);
-      return !url.searchParams.has("utm_source") && !url.searchParams.has("utm_campaign");
+      const meta = await getImageMetadata(creative.image_url);
+      if (meta) {
+        assetWidth = meta.width;
+        assetHeight = meta.height;
+        assetRatio = meta.aspect_ratio;
+      }
     } catch {
-      return false;
     }
-  });
+  }
 
-  if (missingUtm.length > 0) {
-    issues.push({
-      adAccountId: adAccount.id,
-      clientId: client.id,
-      issueType: "utm",
-      severity: "info",
-      title: `${missingUtm.length} creative${missingUtm.length > 1 ? "s" : ""} missing UTM parameters`,
-      description: `The following creatives have destination URLs without UTM tracking parameters: ${missingUtm.map(c => c.name).join(", ")}.`,
-      status: "open",
-      routeTo: "buyer",
+  if (!assetRatio && creative.thumbnail_url) {
+    try {
+      const meta = await getImageMetadata(creative.thumbnail_url);
+      if (meta) {
+        assetWidth = meta.width;
+        assetHeight = meta.height;
+        assetRatio = meta.aspect_ratio;
+      }
+    } catch {
+    }
+  }
+
+  if (!assetRatio) return findings;
+
+  if (placements.feed && isVertical(assetRatio)) {
+    findings.push({
+      ruleId: "ASPECT_001",
+      severity: "blocker",
+      category: "PLACEMENT_FIT",
+      issueType: "placement_fit",
+      message: `9:16 asset detected in Feed placement on ad "${ad.name}"`,
+      whyItMatters: "Feed placements crop vertical assets and make ads look broken.",
+      recommendedFix: "Upload a 1:1 or 4:5 version or remove Feed placements.",
+      evidence: { asset_ratio: assetRatio, placements: placements.all, width: assetWidth, height: assetHeight },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
     });
   }
 
-  return issues;
+  if (placements.story && isSquare(assetRatio)) {
+    findings.push({
+      ruleId: "ASPECT_002",
+      severity: "high",
+      category: "PLACEMENT_FIT",
+      issueType: "placement_fit",
+      message: `Square asset in Stories/Reels placement on ad "${ad.name}"`,
+      whyItMatters: "Stories and Reels expect 9:16 vertical assets. Square assets leave large black bars and look unprofessional.",
+      recommendedFix: "Upload a 9:16 version for Stories/Reels or remove those placements.",
+      evidence: { asset_ratio: assetRatio, placements: placements.all, width: assetWidth, height: assetHeight },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
+    });
+  }
+
+  const hasMultiplePlacementGroups = placements.feed && placements.story;
+  const feedSpec = creative.asset_feed_spec;
+  const hasSingleAsset = !feedSpec || !feedSpec.images || feedSpec.images.length <= 1;
+
+  if (hasMultiplePlacementGroups && hasSingleAsset) {
+    findings.push({
+      ruleId: "ASPECT_003",
+      severity: "high",
+      category: "PLACEMENT_FIT",
+      issueType: "placement_fit",
+      message: `Missing placement-specific assets on ad "${ad.name}"`,
+      whyItMatters: "Using one creative asset across Feed and Stories means at least one placement will display a poorly-fitting asset.",
+      recommendedFix: "Upload separate assets for Feed (1:1 or 4:5) and Stories (9:16).",
+      evidence: { asset_ratio: assetRatio, placement_groups: ["feed", "story"], asset_count: 1 },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
+    });
+  }
+
+  const ratio = assetWidth / assetHeight;
+  const safeMin = 0.5;
+  const safeMax = 2.0;
+  if (ratio < safeMin || ratio > safeMax) {
+    findings.push({
+      ruleId: "ASPECT_004",
+      severity: "medium",
+      category: "PLACEMENT_FIT",
+      issueType: "placement_fit",
+      message: `Extreme crop risk on ad "${ad.name}"`,
+      whyItMatters: "Assets with extreme aspect ratios may be heavily cropped across most placements, resulting in cut-off content.",
+      recommendedFix: "Use a standard aspect ratio (1:1, 4:5, 9:16, or 1.91:1).",
+      evidence: { asset_ratio: assetRatio, width: assetWidth, height: assetHeight },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
+    });
+  }
+
+  return findings;
+}
+
+function checkCreativeIntegrity(
+  ad: MetaAd,
+  creative: MetaAdCreativeDetail,
+  client: Client,
+  pages: Array<{ id: string; name: string }>
+): Finding[] {
+  const findings: Finding[] = [];
+  const spec = creative.object_story_spec;
+
+  const isLinkAd = creative.object_type === "SHARE" || creative.link_url || spec?.link_data;
+  if (isLinkAd && !creative.call_to_action_type) {
+    const ctaFromSpec = spec?.link_data?.call_to_action?.type || spec?.video_data?.call_to_action?.type;
+    if (!ctaFromSpec) {
+      findings.push({
+        ruleId: "CREATIVE_001",
+        severity: "medium",
+        category: "CREATIVE_INTEGRITY",
+        issueType: "creative_integrity",
+        message: `Missing CTA on link ad "${ad.name}"`,
+        whyItMatters: "Link ads without a call-to-action button have lower click-through rates.",
+        recommendedFix: "Add a CTA button (Learn More, Shop Now, Sign Up, etc.).",
+        evidence: { ad_name: ad.name, object_type: creative.object_type },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
+    }
+  }
+
+  const linkUrl = creative.link_url || spec?.link_data?.link || spec?.video_data?.link || "";
+  if (linkUrl && client.allowedDomains && client.allowedDomains.length > 0) {
+    try {
+      const hostname = new URL(linkUrl).hostname.replace("www.", "");
+      const approved = client.allowedDomains.some(d => hostname === d || hostname.endsWith(`.${d}`));
+      if (!approved) {
+        findings.push({
+          ruleId: "CREATIVE_002",
+          severity: "high",
+          category: "CREATIVE_INTEGRITY",
+          issueType: "creative_integrity",
+          message: `Unapproved domain on ad "${ad.name}"`,
+          whyItMatters: "Ads linking to unapproved domains could send traffic to the wrong site or violate client agreements.",
+          recommendedFix: `Update the destination URL to use an approved domain: ${client.allowedDomains.join(", ")}.`,
+          evidence: { link_url: linkUrl, domain: hostname, approved_domains: client.allowedDomains },
+          adId: ad.id,
+          adsetId: ad.adset_id,
+          campaignId: ad.campaign_id,
+        });
+      }
+    } catch {
+    }
+  }
+
+  const pageId = spec?.page_id || creative.effective_object_story_id?.split("_")[0];
+  if (pageId && client.allowedPageIds && client.allowedPageIds.length > 0) {
+    const approved = client.allowedPageIds.some(id => id === pageId || id === `page_${pageId}` || `page_${id}` === pageId);
+    if (!approved) {
+      findings.push({
+        ruleId: "CREATIVE_003",
+        severity: "high",
+        category: "CREATIVE_INTEGRITY",
+        issueType: "creative_integrity",
+        message: `Wrong Facebook page on ad "${ad.name}"`,
+        whyItMatters: "Ads running under an unapproved page misrepresent the brand identity.",
+        recommendedFix: `Update the ad to use an approved page ID: ${client.allowedPageIds.join(", ")}.`,
+        evidence: { page_id: pageId, approved_pages: client.allowedPageIds, ad_name: ad.name },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
+    }
+  }
+
+  if (creative.video_id && !creative.thumbnail_url) {
+    findings.push({
+      ruleId: "CREATIVE_004",
+      severity: "medium",
+      category: "CREATIVE_INTEGRITY",
+      issueType: "creative_integrity",
+      message: `Missing video thumbnail on ad "${ad.name}"`,
+      whyItMatters: "Videos without a custom thumbnail use an auto-generated frame which may not represent the content well.",
+      recommendedFix: "Upload a custom video thumbnail image.",
+      evidence: { video_id: creative.video_id, ad_name: ad.name },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
+    });
+  }
+
+  return findings;
+}
+
+function checkTracking(ad: MetaAd, creative: MetaAdCreativeDetail, client: Client): Finding[] {
+  const findings: Finding[] = [];
+  const spec = creative.object_story_spec;
+
+  const linkUrl = creative.link_url || spec?.link_data?.link || spec?.video_data?.link || "";
+
+  if (linkUrl && (client.requiredUtm === true || client.requiredUtm === null)) {
+    try {
+      const url = new URL(linkUrl);
+      const hasUtm = url.searchParams.has("utm_source") || url.searchParams.has("utm_campaign");
+      if (!hasUtm) {
+        findings.push({
+          ruleId: "TRACK_001",
+          severity: "high",
+          category: "TRACKING",
+          issueType: "tracking",
+          message: `Missing UTM parameters on ad "${ad.name}"`,
+          whyItMatters: "Without UTM parameters, you cannot properly attribute traffic and conversions from this ad in analytics.",
+          recommendedFix: "Add utm_source, utm_medium, and utm_campaign parameters to the destination URL.",
+          evidence: { link_url: linkUrl, ad_name: ad.name },
+          adId: ad.id,
+          adsetId: ad.adset_id,
+          campaignId: ad.campaign_id,
+        });
+      }
+    } catch {
+    }
+  }
+
+  if (ad.tracking_specs && Array.isArray(ad.tracking_specs)) {
+    const hasPixel = ad.tracking_specs.some((spec: any) =>
+      spec.fb_pixel || spec.pixel || (spec.action_type && spec.fb_pixel)
+    );
+    if (!hasPixel && linkUrl) {
+      findings.push({
+        ruleId: "TRACK_002",
+        severity: "high",
+        category: "TRACKING",
+        issueType: "tracking",
+        message: `No pixel tracking configured on ad "${ad.name}"`,
+        whyItMatters: "Without a pixel, conversion events from this ad cannot be tracked, making optimization and attribution impossible.",
+        recommendedFix: "Add a Meta pixel to the ad's tracking specs or verify the pixel is configured at the ad set or campaign level.",
+        evidence: { tracking_specs: ad.tracking_specs, ad_name: ad.name },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
+    }
+  }
+
+  return findings;
 }
 
 async function createAccessIssue(adAccount: AdAccount, client: Client, error: string, errorCode: string) {
-  let title = "Cannot scan account - unknown error";
+  let message = "Cannot scan account - unknown error";
   let description = error;
   let routeTo: "ops" | "account_manager" | "buyer" | "client" = "ops";
 
   if (errorCode === "TOKEN_EXPIRED") {
-    title = "Token expired - cannot scan account";
+    message = "Token expired - cannot scan account";
     description = `The access token has expired for account "${adAccount.accountName}" (${adAccount.accountId}). ${error}`;
   } else if (errorCode === "PERMISSION_ERROR") {
-    title = "Missing permissions - cannot scan account";
-    description = `Insufficient permissions to access account "${adAccount.accountName}" (${adAccount.accountId}). The token may need additional scopes or the ad account may not be shared properly. ${error}`;
+    message = "Missing permissions - cannot scan account";
+    description = `Insufficient permissions to access account "${adAccount.accountName}" (${adAccount.accountId}). ${error}`;
     routeTo = "account_manager";
   } else if (errorCode === "INVALID_PARAMETER") {
-    title = "Invalid account ID";
+    message = "Invalid account ID";
     description = `The ad account ID "${adAccount.accountId}" appears to be invalid. ${error}`;
     routeTo = "account_manager";
   } else {
-    title = `Scan failed for "${adAccount.accountName}"`;
+    message = `Scan failed for "${adAccount.accountName}"`;
     description = `Error scanning account ${adAccount.accountId}: ${error}`;
   }
 
@@ -414,9 +580,16 @@ async function createAccessIssue(adAccount: AdAccount, client: Client, error: st
     adAccountId: adAccount.id,
     clientId: client.id,
     issueType: "access",
-    severity: "critical",
-    title,
+    severity: "high",
+    message,
     description,
+    ruleId: "ACCESS_001",
+    category: "ACCESS",
+    recommendedFix: errorCode === "TOKEN_EXPIRED"
+      ? "Generate a new system user token and update credentials."
+      : "Verify account access and permissions in Business Manager.",
+    whyItMatters: "Without account access, the scanner cannot detect ad issues.",
+    evidence: { error, errorCode, accountId: adAccount.accountId },
     status: "open",
     routeTo,
   });
@@ -424,15 +597,29 @@ async function createAccessIssue(adAccount: AdAccount, client: Client, error: st
 
 export async function scanAllAccounts(): Promise<ScanResult[]> {
   const results: ScanResult[] = [];
-  const clients = await storage.getClients();
+  const allClients = await storage.getClients();
 
-  for (const client of clients) {
+  for (const client of allClients) {
     if (client.status === "paused") continue;
 
     const accounts = await storage.getAdAccounts(client.id);
     const credentials = await storage.getCredentials(client.id);
 
-    const activeCredential = credentials.find(c => c.status === "active");
+    let activeCredential = credentials.find(c => c.status === "active");
+
+    if (!activeCredential && process.env.META_SYSTEM_USER_TOKEN) {
+      activeCredential = {
+        id: 0,
+        clientId: client.id,
+        credentialType: "system_user_token",
+        tokenOwner: "env_system_user",
+        scopesGranted: ["ads_read", "pages_read_engagement"],
+        status: "active",
+        lastValidatedAt: new Date(),
+        expiresAt: null,
+        createdAt: new Date(),
+      } as any;
+    }
 
     if (!activeCredential) {
       log(`No active credential for client ${client.name}, skipping`, "scanner");
@@ -456,6 +643,7 @@ export async function scanAllAccounts(): Promise<ScanResult[]> {
           accountId: account.id,
           success: false,
           issuesFound: 0,
+          adsScanned: 0,
           coverageUpdated: false,
           error: err.message,
         });

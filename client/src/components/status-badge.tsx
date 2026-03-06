@@ -15,9 +15,15 @@ const statusConfig: Record<string, { variant: "default" | "secondary" | "destruc
   acknowledged: { variant: "secondary", label: "Acknowledged" },
   resolved: { variant: "default", label: "Resolved" },
   dismissed: { variant: "outline", label: "Dismissed" },
-  critical: { variant: "destructive", label: "Critical" },
-  warning: { variant: "secondary", label: "Warning" },
-  info: { variant: "outline", label: "Info" },
+  blocker: { variant: "destructive", label: "Blocker" },
+  high: { variant: "destructive", label: "High" },
+  medium: { variant: "secondary", label: "Medium" },
+  low: { variant: "outline", label: "Low" },
+  ai_toggle: { variant: "secondary", label: "AI Toggle" },
+  placement_fit: { variant: "secondary", label: "Placement Fit" },
+  creative_integrity: { variant: "secondary", label: "Creative" },
+  tracking: { variant: "secondary", label: "Tracking" },
+  access: { variant: "destructive", label: "Access" },
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {

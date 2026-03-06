@@ -300,8 +300,24 @@ function IssueCard({ issue }: { issue: ScanIssue }) {
               <StatusBadge status={issue.status} />
               <span className="text-xs text-muted-foreground">Route: {routeLabels[issue.routeTo] || issue.routeTo}</span>
             </div>
-            <p className="text-sm font-medium mt-2">{issue.title}</p>
+            {issue.ruleId && (
+              <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`}>
+                {issue.ruleId}
+              </span>
+            )}
+            <p className="text-sm font-medium mt-2">{issue.message}</p>
             <p className="text-xs text-muted-foreground mt-1">{issue.description}</p>
+            {issue.recommendedFix && (
+              <p className="text-xs text-primary mt-1">{issue.recommendedFix}</p>
+            )}
+            {issue.evidence && typeof issue.evidence === "object" && Object.keys(issue.evidence as Record<string, any>).length > 0 && (
+              <details className="mt-2 text-xs">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Evidence</summary>
+                <pre className="mt-1 p-2 bg-muted rounded text-[11px] overflow-x-auto whitespace-pre-wrap" data-testid={`text-evidence-${issue.id}`}>
+                  {JSON.stringify(issue.evidence, null, 2)}
+                </pre>
+              </details>
+            )}
           </div>
         </div>
         {issue.status === "open" && (
@@ -485,16 +501,16 @@ function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: nu
           </div>
           <div className="flex items-center gap-2">
             <Button
-              variant="ghost"
-              size="icon"
+              variant="outline"
+              size="sm"
               onClick={() => scanMutation.mutate()}
               disabled={scanMutation.isPending}
               data-testid={`button-scan-account-${account.id}`}
             >
               {scanMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Scanning</>
               ) : (
-                <Scan className="h-4 w-4" />
+                <><Scan className="h-3 w-3 mr-1" /> Scan</>
               )}
             </Button>
             <StatusBadge status={account.status} />

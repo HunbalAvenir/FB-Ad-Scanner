@@ -1,7 +1,7 @@
 # Meta Ads QA Scanner Portal
 
 ## Overview
-Internal portal for managing Meta Ads quality assurance scanning across client ad accounts. Supports multiple access methods (Partner, User Token, Public), credential management, ad account coverage tracking, and issue routing.
+Internal portal for managing Meta Ads quality assurance scanning across client ad accounts. Uses a structured rule engine to detect real ad issues across AI toggles, placement fit, creative integrity, and tracking. Routes findings to the correct team (Ops/AM/Media Buyer/Client).
 
 ## Architecture
 - **Frontend**: React + TypeScript + Vite, Shadcn UI, TanStack Query, Wouter routing
@@ -10,39 +10,53 @@ Internal portal for managing Meta Ads quality assurance scanning across client a
 - **Styling**: Tailwind CSS with dark mode support
 
 ## Data Model
-- **clients**: Client profiles with access modes, BM IDs, allowed page/IG IDs, domains
+- **clients**: Client profiles with access modes, BM IDs, allowed page/IG IDs, domains, policy fields (allowedAiEnhancements, requiredUtm, allowedAspectRatios)
 - **meta_credentials**: System user tokens and user tokens with scopes, expiry tracking
 - **ad_accounts**: Ad accounts with coverage flags (identity, creative, placement, delivery)
-- **scan_issues**: Issues with severity, type, status, and routing (ops/AM/buyer/client)
+- **scan_issues**: Structured findings with ruleId, severity (blocker/high/medium/low), issueType (ai_toggle/placement_fit/creative_integrity/tracking/access), evidence (jsonb), recommendedFix, whyItMatters, adId/adsetId/campaignId, status, routeTo
 - **users**: Basic user table (auth not yet implemented)
 
+## Scanner Rule Engine
+Rules defined in `server/scanner.ts`:
+- **AI Toggle** (AI_001-AI_005): Detects Advantage Creative Enhancements, Image Expansion, Auto Text, Auto Music/Filters, policy violations
+- **Placement Fit** (ASPECT_001-ASPECT_004): 9:16 in feed (blocker), square in stories (high), missing placement assets (high), extreme crop risk (medium)
+- **Creative Integrity** (CREATIVE_001-CREATIVE_004): Missing CTA, unapproved domain, wrong page, missing video thumbnail
+- **Tracking** (TRACK_001-TRACK_002): Missing UTM parameters, invalid pixel
+- **Access** (ACCESS_001): Token/permission failures
+
+Scanner clears old issues per account before each scan via `storage.deleteIssuesByAdAccount()`.
+
 ## Key Pages
-- `/` - Dashboard with stats, degraded accounts, recent issues, client overview
+- `/` - Dashboard with stats (blockers/high/medium counts), degraded accounts, recent issues, client overview
 - `/clients` - Client list with add client dialog
-- `/clients/:id` - Client detail with tabs: Accounts, Credentials, Issues, Onboarding
+- `/clients/:id` - Client detail with tabs: Accounts (per-account scan button), Credentials, Issues (with recommendedFix), Onboarding
 - `/ad-accounts` - All ad accounts with coverage visualization
-- `/issues` - Issue tracker with Open/In Progress/Closed tabs
+- `/issues` - Issue tracker with Open/In Progress/Closed tabs, severity badges, rule IDs, evidence
 - `/credentials` - All credentials with scope and expiry info
 
 ## Meta API Integration
-- `server/meta-api.ts` - Graph API v21.0 client (validateToken, smokeTest, getAds, getAdSets, getAdCreatives, getCampaigns, getAccountPages)
-- `server/scanner.ts` - Issue detection logic (disapproved ads, missing geo, domain mismatches, UTM checks, identity/page ID checks)
-- App credentials stored as secrets: META_APP_ID, META_APP_SECRET
-- App access token generated as `${appId}|${appSecret}`
-- User tokens stored in `meta_credentials.tokenOwner` field (design shortcut)
+- `server/meta-api.ts` - Graph API v21.0 client with expanded fields: creative details (object_story_spec, asset_feed_spec, image_url, video_id, call_to_action_type, link_url, instagram_actor_id), placement targeting, tracking_specs, image metadata extraction
+- `server/scanner.ts` - Structured rule engine with Finding interface
+- Token resolution: META_SYSTEM_USER_TOKEN env var as fallback for system_user_token credentials
+- Ad account IDs auto-prefixed with `act_`
 - Scan routes: `POST /api/scan/all`, `POST /api/scan/account/:id`, `POST /api/validate-token`
 
 ## Key Files
 - `shared/schema.ts` - All Drizzle schemas and Zod validators
 - `server/db.ts` - Database connection
-- `server/storage.ts` - Storage interface and DatabaseStorage implementation
+- `server/storage.ts` - Storage interface with deleteIssuesByAdAccount, getDashboardStats (blocker/high/medium counts)
 - `server/routes.ts` - REST API routes
-- `server/meta-api.ts` - Meta Marketing API client
-- `server/scanner.ts` - Scanner with issue detection logic
-- `server/seed.ts` - Seed data for 5 clients, credentials, ad accounts, issues
+- `server/meta-api.ts` - Meta Marketing API client with getImageMetadata helper
+- `server/scanner.ts` - Rule engine scanner (AI, Placement, Creative, Tracking rules)
+- `server/seed.ts` - Seed data for 5 clients, credentials, ad accounts, issues (uses new schema)
 - `client/src/App.tsx` - Root with sidebar layout, theme provider, routing
-- `client/src/components/` - Shared components (sidebar, theme, status badges, coverage widget)
-- `client/src/pages/` - Page components (dashboard, clients, client-detail with AdAccountCard, ad-accounts, issues, credentials)
+- `client/src/components/` - Shared components (sidebar, theme, StatusBadge with blocker/high/medium/low, coverage widget)
+- `client/src/pages/` - Page components (dashboard, clients, client-detail with AdAccountCard + scan button, ad-accounts, issues, credentials)
+
+## Environment Secrets
+- META_APP_ID, META_APP_SECRET - App credentials
+- META_SYSTEM_USER_TOKEN - System user token for API access
+- SESSION_SECRET - Session management
 
 ## Running
 - `npm run dev` starts both Express backend and Vite frontend on port 5000

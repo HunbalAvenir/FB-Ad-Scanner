@@ -96,16 +96,31 @@ export async function smokeTestAdAccount(accountId: string, token: string): Prom
   };
 }
 
+export interface MetaAdCreativeDetail {
+  id: string;
+  object_story_spec?: any;
+  asset_feed_spec?: any;
+  image_url?: string;
+  image_hash?: string;
+  thumbnail_url?: string;
+  video_id?: string;
+  call_to_action_type?: string;
+  link_url?: string;
+  instagram_actor_id?: string;
+  object_type?: string;
+  effective_object_story_id?: string;
+}
+
 export interface MetaAd {
   id: string;
   name: string;
   status: string;
   effective_status: string;
-  creative?: {
-    id: string;
-  };
+  creative?: MetaAdCreativeDetail;
   adset_id?: string;
   campaign_id?: string;
+  tracking_specs?: any[];
+  preview_shareable_link?: string;
 }
 
 export async function getAds(accountId: string, token: string, limit = 100): Promise<{
@@ -114,7 +129,7 @@ export async function getAds(accountId: string, token: string, limit = 100): Pro
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
   const res = await metaFetch<MetaAd[]>(`/${actId}/ads`, token, {
-    fields: "id,name,status,effective_status,creative{id},adset_id,campaign_id",
+    fields: "id,name,status,effective_status,creative{id,object_story_spec,asset_feed_spec,image_url,image_hash,thumbnail_url,video_id,call_to_action_type,link_url,instagram_actor_id,object_type,effective_object_story_id},adset_id,campaign_id,tracking_specs,preview_shareable_link",
     limit: String(limit),
   });
 
@@ -122,12 +137,20 @@ export async function getAds(accountId: string, token: string, limit = 100): Pro
   return { ads: res.data as MetaAd[] };
 }
 
+export interface MetaAdSetTargeting {
+  publisher_platforms?: string[];
+  facebook_positions?: string[];
+  instagram_positions?: string[];
+  device_platforms?: string[];
+  [key: string]: any;
+}
+
 export interface MetaAdSet {
   id: string;
   name: string;
   status: string;
   effective_status: string;
-  targeting?: any;
+  targeting?: MetaAdSetTargeting;
   optimization_goal?: string;
   billing_event?: string;
   bid_strategy?: string;
@@ -142,7 +165,7 @@ export async function getAdSets(accountId: string, token: string, limit = 100): 
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
   const res = await metaFetch<MetaAdSet[]>(`/${actId}/adsets`, token, {
-    fields: "id,name,status,effective_status,targeting,optimization_goal,billing_event,bid_strategy,daily_budget,lifetime_budget,promoted_object",
+    fields: "id,name,status,effective_status,targeting{publisher_platforms,facebook_positions,instagram_positions,device_platforms},optimization_goal,billing_event,bid_strategy,daily_budget,lifetime_budget,promoted_object",
     limit: String(limit),
   });
 
@@ -213,6 +236,77 @@ export async function getAccountPages(accountId: string, token: string): Promise
 
   if (res.error) return { error: res.error.message };
   return { pages: res.data as Array<{ id: string; name: string }> };
+}
+
+export interface ImageMetadata {
+  width: number;
+  height: number;
+  aspect_ratio: string;
+}
+
+export async function getImageMetadata(imageUrl: string): Promise<ImageMetadata | null> {
+  try {
+    const res = await fetch(imageUrl, { method: "GET" });
+    if (!res.ok) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+
+    let width = 0;
+    let height = 0;
+
+    if (buffer[0] === 0x89 && buffer[1] === 0x50) {
+      width = buffer.readUInt32BE(16);
+      height = buffer.readUInt32BE(20);
+    } else if (buffer[0] === 0xFF && buffer[1] === 0xD8) {
+      let offset = 2;
+      while (offset < buffer.length) {
+        if (buffer[offset] !== 0xFF) break;
+        const marker = buffer[offset + 1];
+        if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+          height = buffer.readUInt16BE(offset + 5);
+          width = buffer.readUInt16BE(offset + 7);
+          break;
+        }
+        const segLen = buffer.readUInt16BE(offset + 2);
+        offset += 2 + segLen;
+      }
+    }
+
+    if (width === 0 || height === 0) return null;
+
+    const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
+    const d = gcd(width, height);
+    const aspect_ratio = `${width / d}:${height / d}`;
+
+    return { width, height, aspect_ratio };
+  } catch {
+    return null;
+  }
+}
+
+export async function getVideoThumbnail(videoId: string, token: string): Promise<{
+  thumbnailUrl?: string;
+  width?: number;
+  height?: number;
+  error?: string;
+}> {
+  const res = await metaFetch<any>(`/${videoId}`, token, {
+    fields: "thumbnails{uri,width,height},source,picture",
+  });
+
+  if (res.error) return { error: res.error.message };
+
+  const data = res.data as any;
+  const thumb = data?.thumbnails?.data?.[0];
+  if (thumb) {
+    return {
+      thumbnailUrl: thumb.uri,
+      width: thumb.width,
+      height: thumb.height,
+    };
+  }
+
+  return { thumbnailUrl: data?.picture };
 }
 
 export function generateAppAccessToken(): string {

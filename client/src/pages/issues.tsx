@@ -4,15 +4,16 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
+import { AlertOctagon, AlertTriangle, CheckCircle2, Info, ExternalLink, Wrench } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
-import type { ScanIssue, Client } from "@shared/schema";
+import type { ScanIssue, Client, AdAccount } from "@shared/schema";
 
 export default function IssuesPage() {
   const { data: issues, isLoading } = useQuery<ScanIssue[]>({ queryKey: ["/api/issues"] });
   const { data: clients } = useQuery<Client[]>({ queryKey: ["/api/clients"] });
+  const { data: accounts } = useQuery<AdAccount[]>({ queryKey: ["/api/ad-accounts"] });
   const { toast } = useToast();
 
   const mutation = useMutation({
@@ -30,26 +31,14 @@ export default function IssuesPage() {
   const acknowledgedIssues = issues?.filter(i => i.status === "acknowledged") || [];
   const resolvedIssues = issues?.filter(i => i.status === "resolved" || i.status === "dismissed") || [];
 
-  const typeLabels: Record<string, string> = {
-    creative: "Creative",
-    targeting: "Targeting",
-    delivery: "Delivery",
-    identity: "Identity",
-    access: "Access",
-    placement: "Placement",
-    utm: "UTM",
-  };
-
-  const routeLabels: Record<string, string> = {
-    ops: "Ops",
-    account_manager: "Account Manager",
-    buyer: "Media Buyer",
-    client: "Client",
-  };
+  const blockerCount = openIssues.filter(i => i.severity === "blocker").length;
+  const highCount = openIssues.filter(i => i.severity === "high").length;
+  const mediumCount = openIssues.filter(i => i.severity === "medium").length;
 
   const severityIcon = (severity: string) => {
-    if (severity === "critical") return <AlertTriangle className="h-4 w-4 text-destructive" />;
-    if (severity === "warning") return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
+    if (severity === "blocker") return <AlertOctagon className="h-4 w-4 text-destructive" />;
+    if (severity === "high") return <AlertTriangle className="h-4 w-4 text-destructive" />;
+    if (severity === "medium") return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
     return <Info className="h-4 w-4 text-muted-foreground" />;
   };
 
@@ -69,6 +58,7 @@ export default function IssuesPage() {
       <div className="space-y-3">
         {list.map(issue => {
           const client = clients?.find(c => c.id === issue.clientId);
+          const account = accounts?.find(a => a.id === issue.adAccountId);
           return (
             <Card key={issue.id} data-testid={`card-issue-${issue.id}`}>
               <CardContent className="p-4">
@@ -77,19 +67,42 @@ export default function IssuesPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <StatusBadge status={issue.severity} />
-                      <StatusBadge status={issue.issueType} className="" />
-                      {client && (
-                        <Link href={`/clients/${client.id}`}>
-                          <span className="text-xs text-muted-foreground hover:underline cursor-pointer">{client.name}</span>
-                        </Link>
+                      <StatusBadge status={issue.issueType} />
+                      {issue.ruleId && (
+                        <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`}>
+                          {issue.ruleId}
+                        </span>
                       )}
                     </div>
-                    <p className="text-sm font-medium mt-1.5">{issue.title}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{issue.description}</p>
+                    <p className="text-sm font-medium mt-1.5" data-testid={`text-issue-message-${issue.id}`}>{issue.message}</p>
+                    {issue.whyItMatters && (
+                      <p className="text-xs text-muted-foreground mt-1">{issue.whyItMatters}</p>
+                    )}
+                    {issue.recommendedFix && (
+                      <div className="flex items-start gap-1.5 mt-2 text-xs">
+                        <Wrench className="h-3 w-3 mt-0.5 shrink-0 text-primary" />
+                        <span className="text-primary" data-testid={`text-fix-${issue.id}`}>{issue.recommendedFix}</span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground flex-wrap">
-                      <span>Route: <span className="font-medium">{routeLabels[issue.routeTo]}</span></span>
-                      <span>Type: <span className="font-medium">{typeLabels[issue.issueType]}</span></span>
+                      {client && (
+                        <Link href={`/clients/${client.id}`}>
+                          <span className="hover:underline cursor-pointer">{client.name}</span>
+                        </Link>
+                      )}
+                      {account && <span className="font-mono">{account.accountName}</span>}
+                      {issue.campaignId && <span>Campaign: {issue.campaignId}</span>}
+                      {issue.adsetId && <span>Ad Set: {issue.adsetId}</span>}
+                      {issue.adId && <span>Ad: {issue.adId}</span>}
                     </div>
+                    {issue.evidence && typeof issue.evidence === "object" && Object.keys(issue.evidence as Record<string, any>).length > 0 && (
+                      <details className="mt-2 text-xs">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Evidence</summary>
+                        <pre className="mt-1 p-2 bg-muted rounded text-[11px] overflow-x-auto whitespace-pre-wrap" data-testid={`text-evidence-${issue.id}`}>
+                          {JSON.stringify(issue.evidence, null, 2)}
+                        </pre>
+                      </details>
+                    )}
                   </div>
                 </div>
                 {issue.status === "open" && (
@@ -117,8 +130,31 @@ export default function IssuesPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">Issues</h1>
-        <p className="text-sm text-muted-foreground mt-1">Track and manage scan issues across all accounts.</p>
+        <p className="text-sm text-muted-foreground mt-1">Track and manage scan findings across all accounts.</p>
       </div>
+
+      {!isLoading && openIssues.length > 0 && (
+        <div className="flex items-center gap-4 text-sm">
+          {blockerCount > 0 && (
+            <div className="flex items-center gap-1.5">
+              <AlertOctagon className="h-4 w-4 text-destructive" />
+              <span className="font-medium text-destructive" data-testid="text-blocker-count">{blockerCount} Blocker{blockerCount !== 1 ? "s" : ""}</span>
+            </div>
+          )}
+          {highCount > 0 && (
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <span className="font-medium" data-testid="text-high-count">{highCount} High</span>
+            </div>
+          )}
+          {mediumCount > 0 && (
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-4 w-4 text-yellow-500" />
+              <span className="font-medium" data-testid="text-medium-count">{mediumCount} Medium</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {isLoading ? (
         <div className="space-y-3">

@@ -1,0 +1,513 @@
+Product Requirements Document
+Tool: Meta Ad Error Detection Scanner
+Goal
+
+Automatically scan Meta ad accounts and detect configuration errors, creative issues, AI toggles, and placement problems that negatively affect ad performance or cause broken-looking ads.
+
+The tool flags issues and produces structured findings so the team can quickly identify and fix mistakes made during campaign setup.
+
+System Overview
+Core Components
+
+Account Scanner
+Pulls ads from Meta API for each connected account.
+
+Creative Analyzer
+Examines ad creative assets (images, videos, ratios).
+
+Rule Engine
+Runs rule checks against each ad.
+
+Policy Layer
+Client-specific rules and allowed settings.
+
+Findings Database
+Stores detected issues.
+
+Dashboard
+Shows flagged problems.
+
+Alert System
+Slack / Email alerts for severe issues.
+
+Data Sources
+Meta Marketing API
+
+Primary endpoint:
+
+/act_{ad_account_id}/ads
+
+Fields to pull:
+
+id
+name
+status
+adset_id
+campaign_id
+created_time
+updated_time
+creative
+tracking_specs
+preview_shareable_link
+
+Expand creative fields:
+
+creative{
+ id
+ object_story_spec
+ asset_feed_spec
+ image_url
+ image_hash
+ thumbnail_url
+ video_id
+ call_to_action_type
+ link_url
+ instagram_actor_id
+ object_type
+ effective_object_story_id
+}
+
+Ad set placement fields:
+
+adset{
+ id
+ name
+ targeting{
+  publisher_platforms
+  facebook_positions
+  instagram_positions
+  device_platforms
+ }
+}
+
+Campaign fields:
+
+campaign{
+ id
+ name
+ objective
+ status
+}
+Scan Frequency
+
+Default scan:
+
+Every 6 hours
+
+Manual scan:
+
+Available from dashboard.
+
+System Architecture
+Step 1
+
+Fetch all active ads
+
+status = ACTIVE, PAUSED
+Step 2
+
+Pull creative metadata
+
+Step 3
+
+Download image/video metadata
+
+Determine:
+
+width
+height
+aspect_ratio
+Step 4
+
+Evaluate rules
+
+Step 5
+
+Store findings
+
+Step 6
+
+Trigger alerts if needed
+
+Rule Engine Structure
+
+Each rule returns:
+
+rule_id
+severity
+category
+message
+recommended_fix
+evidence
+Finding Object Schema
+
+Example JSON:
+
+{
+  "rule_id": "ASPECT_001",
+  "severity": "blocker",
+  "category": "PLACEMENT_FIT",
+  "account_id": "123",
+  "campaign_id": "456",
+  "adset_id": "789",
+  "ad_id": "101112",
+  "message": "9:16 asset detected in Feed placement",
+  "why_it_matters": "Feed placements crop vertical assets and make ads look broken",
+  "recommended_fix": "Upload a 1:1 or 4:5 version or remove Feed placements",
+  "evidence": {
+      "asset_ratio": "9:16",
+      "placements": ["facebook_feed","instagram_feed"]
+  },
+  "timestamp": "2026-03-05T16:22:10"
+}
+Client Policy Configuration
+
+Each client account has a policy object.
+
+Example:
+
+{
+ "client_name": "Focused Capital",
+ "allowed_ai_enhancements": [],
+ "required_utm": true,
+ "approved_domains": [
+  "focusedcapital.com",
+  "invest.focusedcapital.com"
+ ],
+ "approved_pages": [
+  "123456789"
+ ],
+ "allowed_aspect_ratios": {
+   "feed": ["1:1","4:5","1.91:1"],
+   "story": ["9:16"]
+ }
+}
+Rule Categories
+1 AI Toggle Rules
+
+Goal: detect automatic creative modifications.
+
+AI_001
+
+Advantage Creative Enhancements Enabled
+
+Trigger:
+
+creative contains enhancement settings
+
+Severity
+
+High
+
+Message
+
+Advantage creative enhancements enabled
+
+Fix
+
+Disable enhancements.
+
+AI_002
+
+Image Expansion Enabled
+
+Trigger
+
+image_expansion = true
+
+Severity
+
+High
+
+Reason
+
+Image borders get stretched.
+
+AI_003
+
+Auto Text Generation Enabled
+
+Trigger
+
+text_optimization = true
+
+Severity
+
+Medium
+
+AI_004
+
+Auto Music / Filters Enabled
+
+Trigger
+
+video_enhancements enabled
+
+Severity
+
+Medium
+
+AI_005
+
+Enhancement Not Allowed By Client
+
+Trigger
+
+toggle not in client allow list
+
+Severity
+
+High
+
+Placement Fit Rules
+Placement Groups
+VERTICAL_FULL
+Stories
+Reels
+FEED
+Facebook Feed
+Instagram Feed
+SMALL
+Right Column
+Search
+ASPECT_001
+
+Vertical asset in feed
+
+Trigger
+
+placement includes FEED
+AND
+asset_ratio ≈ 9:16
+
+Severity
+
+Blocker
+
+ASPECT_002
+
+Square asset in stories
+
+Trigger
+
+placement includes STORIES
+AND
+ratio ≠ 9:16
+
+Severity
+
+High
+
+ASPECT_003
+
+Missing placement-specific assets
+
+Trigger
+
+multiple placement groups
+BUT only one creative asset
+
+Severity
+
+High
+
+ASPECT_004
+
+Extreme crop risk
+
+Trigger
+
+ratio outside safe range
+
+Severity
+
+Medium
+
+Creative Integrity Rules
+CREATIVE_001
+
+Missing CTA
+
+Trigger
+
+link ad AND CTA empty
+
+Severity
+
+Medium
+
+CREATIVE_002
+
+Unapproved domain
+
+Trigger
+
+link_url domain not in approved list
+
+Severity
+
+High
+
+CREATIVE_003
+
+Wrong Facebook page
+
+Trigger
+
+page_id not in approved pages
+
+Severity
+
+High
+
+CREATIVE_004
+
+Missing video thumbnail
+
+Trigger
+
+video ad AND thumbnail missing
+
+Severity
+
+Medium
+
+Tracking Rules
+TRACK_001
+
+Missing UTM parameters
+
+Trigger
+
+link_url missing utm_source
+
+Severity
+
+High
+
+TRACK_002
+
+Invalid pixel
+
+Trigger
+
+pixel_id not in client config
+
+Severity
+
+High
+
+Severity Levels
+BLOCKER
+Ad looks broken
+HIGH
+Major performance or compliance risk
+MEDIUM
+Suboptimal but functional
+LOW
+Minor improvement
+Dashboard Features
+Account Summary
+
+Shows:
+
+total ads scanned
+blockers
+high issues
+medium issues
+Issue Table
+
+Columns:
+
+Account
+Campaign
+Adset
+Ad
+Rule
+Severity
+Fix
+Last scanned
+Ad Preview
+
+Include:
+
+meta preview link
+
+Example field:
+
+preview_shareable_link
+Alerts
+Slack Alerts
+
+Triggered when:
+
+severity = BLOCKER
+
+Example message:
+
+🚨 Meta Ad Error Detected
+
+Account: Titan Funding
+Campaign: Investor Leads
+Ad: VSL Test 3
+
+Issue:
+9:16 image running in feed placement
+
+Recommended Fix:
+Upload 1:1 creative or restrict placements.
+Future Expansion
+
+The architecture supports adding rules for:
+
+Ad Set Level
+
+Examples
+
+Audience Network enabled
+Wrong optimization event
+Wrong geo targeting
+Daily budget too low
+Campaign Level
+
+Examples
+
+Wrong objective
+Advantage campaign budget enabled
+Learning limited
+Bid cap misconfigured
+Engineering Stack Recommendation
+
+Backend
+
+Python
+FastAPI
+
+Scheduler
+
+Celery or Cron
+
+Database
+
+Postgres
+
+Queue
+
+Redis
+
+Frontend
+
+NextJS
+
+Hosting
+
+AWS or Vercel
+Estimated Development Time
+
+MVP
+
+2 to 3 weeks
+
+Production ready system
+
+4 to 6 weeks

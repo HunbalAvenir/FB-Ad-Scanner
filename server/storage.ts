@@ -40,8 +40,12 @@ export interface IStorage {
     activeClients: number;
     degradedAccounts: number;
     openIssues: number;
-    criticalIssues: number;
+    blockerIssues: number;
+    highIssues: number;
+    mediumIssues: number;
   }>;
+
+  deleteIssuesByAdAccount(adAccountId: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -155,14 +159,21 @@ export class DatabaseStorage implements IStorage {
     const allClients = await this.getClients();
     const allAccounts = await this.getAllAdAccounts();
     const allIssues = await this.getIssues();
+    const openIssues = allIssues.filter(i => i.status === "open");
 
     return {
       totalClients: allClients.length,
       activeClients: allClients.filter(c => c.status === "active").length,
       degradedAccounts: allAccounts.filter(a => a.status === "degraded" || a.status === "error").length,
-      openIssues: allIssues.filter(i => i.status === "open").length,
-      criticalIssues: allIssues.filter(i => i.severity === "critical" && i.status === "open").length,
+      openIssues: openIssues.length,
+      blockerIssues: openIssues.filter(i => i.severity === "blocker").length,
+      highIssues: openIssues.filter(i => i.severity === "high").length,
+      mediumIssues: openIssues.filter(i => i.severity === "medium").length,
     };
+  }
+
+  async deleteIssuesByAdAccount(adAccountId: number): Promise<void> {
+    await db.delete(scanIssues).where(eq(scanIssues.adAccountId, adAccountId));
   }
 }
 
