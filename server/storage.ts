@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   clients, metaCredentials, adAccounts, scanIssues,
@@ -46,6 +46,8 @@ export interface IStorage {
   }>;
 
   deleteIssuesByAdAccount(adAccountId: number): Promise<void>;
+  bulkUpdateIssues(ids: number[], data: Partial<InsertScanIssue>): Promise<number>;
+  bulkUpdateIssuesByRule(ruleId: string, adAccountId: number, currentStatus: string, newStatus: string): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -174,6 +176,23 @@ export class DatabaseStorage implements IStorage {
 
   async deleteIssuesByAdAccount(adAccountId: number): Promise<void> {
     await db.delete(scanIssues).where(eq(scanIssues.adAccountId, adAccountId));
+  }
+
+  async bulkUpdateIssues(ids: number[], data: Partial<InsertScanIssue>): Promise<number> {
+    const result = await db.update(scanIssues).set(data).where(inArray(scanIssues.id, ids)).returning();
+    return result.length;
+  }
+
+  async bulkUpdateIssuesByRule(ruleId: string, adAccountId: number, currentStatus: string, newStatus: string): Promise<number> {
+    const conditions = [
+      eq(scanIssues.ruleId, ruleId),
+      eq(scanIssues.adAccountId, adAccountId),
+    ];
+    if (currentStatus) {
+      conditions.push(eq(scanIssues.status, currentStatus as any));
+    }
+    const result = await db.update(scanIssues).set({ status: newStatus as any }).where(and(...conditions)).returning();
+    return result.length;
   }
 }
 

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe } from "lucide-react";
+import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -214,7 +214,7 @@ export default function ClientDetailPage() {
           ) : (
             clientIssues.map(issue => {
               const acct = accounts?.find(a => a.id === issue.adAccountId);
-              return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} />;
+              return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
             })
           )}
         </TabsContent>
@@ -278,7 +278,7 @@ function adsManagerUrl(accountId: string, type: "ad" | "adset" | "campaign", ent
   return `https://www.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
 }
 
-function IssueCard({ issue, metaAccountId }: { issue: ScanIssue; metaAccountId?: string }) {
+function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; metaAccountId?: string; allIssues?: ScanIssue[] }) {
   const { toast } = useToast();
   const mutation = useMutation({
     mutationFn: async (newStatus: string) => {
@@ -291,12 +291,49 @@ function IssueCard({ issue, metaAccountId }: { issue: ScanIssue; metaAccountId?:
     },
   });
 
+  const bulkMutation = useMutation({
+    mutationFn: async (body: { ruleId: string; adAccountId: number; currentStatus: string; status: string }) => {
+      const res = await apiRequest("PATCH", "/api/issues/bulk", body);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/issues"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({ title: `Updated ${data.updated} issue${data.updated !== 1 ? "s" : ""}` });
+    },
+  });
+
+  const isPending = mutation.isPending || bulkMutation.isPending;
+
+  const countSameRule = (statusFilter: string) => {
+    if (!allIssues || !issue.ruleId) return 0;
+    return allIssues.filter(i =>
+      i.ruleId === issue.ruleId &&
+      i.adAccountId === issue.adAccountId &&
+      i.status === statusFilter &&
+      i.id !== issue.id
+    ).length;
+  };
+
+  const handleBulkAction = (currentStatus: string, newStatus: string) => {
+    if (!issue.ruleId) return;
+    bulkMutation.mutate({
+      ruleId: issue.ruleId,
+      adAccountId: issue.adAccountId,
+      currentStatus,
+      status: newStatus,
+    });
+  };
+
   const routeLabels: Record<string, string> = {
     ops: "Ops",
     account_manager: "Account Manager",
     buyer: "Media Buyer",
     client: "Client",
   };
+
+  const objective = (issue as any).campaignObjective;
+  const formatObjective = (obj: string) => obj.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
   return (
     <Card data-testid={`card-issue-${issue.id}`}>
@@ -306,13 +343,18 @@ function IssueCard({ issue, metaAccountId }: { issue: ScanIssue; metaAccountId?:
             <div className="flex items-center gap-2 flex-wrap">
               <StatusBadge status={issue.severity} />
               <StatusBadge status={issue.status} />
+              {issue.ruleId && (
+                <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`}>
+                  {issue.ruleId}
+                </span>
+              )}
+              {objective && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" data-testid={`text-objective-${issue.id}`}>
+                  {formatObjective(objective)}
+                </span>
+              )}
               <span className="text-xs text-muted-foreground">Route: {routeLabels[issue.routeTo] || issue.routeTo}</span>
             </div>
-            {issue.ruleId && (
-              <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`}>
-                {issue.ruleId}
-              </span>
-            )}
             <p className="text-sm font-medium mt-2">{issue.message}</p>
             <p className="text-xs text-muted-foreground mt-1">{issue.description}</p>
             {issue.recommendedFix && (
@@ -351,15 +393,54 @@ function IssueCard({ issue, metaAccountId }: { issue: ScanIssue; metaAccountId?:
           </div>
         </div>
         {issue.status === "open" && (
-          <div className="flex gap-2 mt-3 pt-3 border-t border-card-border flex-wrap">
-            <Button variant="secondary" size="sm" onClick={() => mutation.mutate("acknowledged")} disabled={mutation.isPending} data-testid={`button-acknowledge-${issue.id}`}>
+          <div className="flex gap-2 mt-3 pt-3 border-t border-card-border flex-wrap items-center">
+            <Button variant="secondary" size="sm" onClick={() => mutation.mutate("acknowledged")} disabled={isPending} data-testid={`button-acknowledge-${issue.id}`}>
               Acknowledge
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => mutation.mutate("resolved")} disabled={mutation.isPending} data-testid={`button-resolve-${issue.id}`}>
+            <Button variant="secondary" size="sm" onClick={() => mutation.mutate("resolved")} disabled={isPending} data-testid={`button-resolve-${issue.id}`}>
               Resolve
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => mutation.mutate("dismissed")} disabled={mutation.isPending} data-testid={`button-dismiss-${issue.id}`}>
+            <Button variant="ghost" size="sm" onClick={() => mutation.mutate("dismissed")} disabled={isPending} data-testid={`button-dismiss-${issue.id}`}>
               Dismiss
+            </Button>
+            {countSameRule("open") > 0 && issue.ruleId && (
+              <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+                <span>{countSameRule("open")} more with same rule</span>
+                <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => handleBulkAction("open", "resolved")} disabled={isPending} data-testid={`button-bulk-resolve-${issue.id}`}>
+                  Resolve All ({countSameRule("open") + 1})
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => handleBulkAction("open", "dismissed")} disabled={isPending} data-testid={`button-bulk-dismiss-${issue.id}`}>
+                  Dismiss All
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+        {issue.status === "acknowledged" && (
+          <div className="flex gap-2 mt-3 pt-3 border-t border-card-border flex-wrap items-center">
+            <Button variant="secondary" size="sm" onClick={() => mutation.mutate("resolved")} disabled={isPending} data-testid={`button-resolve-${issue.id}`}>
+              Resolve
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => mutation.mutate("dismissed")} disabled={isPending} data-testid={`button-dismiss-${issue.id}`}>
+              Dismiss
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => mutation.mutate("open")} disabled={isPending} data-testid={`button-reopen-${issue.id}`}>
+              <RotateCcw className="h-3 w-3 mr-1" /> Reopen
+            </Button>
+            {countSameRule("acknowledged") > 0 && issue.ruleId && (
+              <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+                <span>{countSameRule("acknowledged")} more</span>
+                <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => handleBulkAction("acknowledged", "resolved")} disabled={isPending} data-testid={`button-bulk-resolve-${issue.id}`}>
+                  Resolve All ({countSameRule("acknowledged") + 1})
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+        {(issue.status === "resolved" || issue.status === "dismissed") && (
+          <div className="flex gap-2 mt-3 pt-3 border-t border-card-border flex-wrap">
+            <Button variant="ghost" size="sm" onClick={() => mutation.mutate("open")} disabled={isPending} data-testid={`button-reopen-${issue.id}`}>
+              <RotateCcw className="h-3 w-3 mr-1" /> Reopen
             </Button>
           </div>
         )}
@@ -511,6 +592,7 @@ interface AdUrlEntry {
 
 function UrlAuditDialog({ account }: { account: AdAccount }) {
   const [open, setOpen] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<{ type: "domain" | "invalid" | "missingUtm"; value?: string } | null>(null);
   const { data, isLoading } = useQuery<{ urls: AdUrlEntry[]; error?: string }>({
     queryKey: [`/api/ad-accounts/${account.id}/urls`],
     enabled: open,
@@ -522,8 +604,24 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
   const missingUtm = urls.filter(u => !u.hasUtm);
   const actNum = account.accountId.replace("act_", "");
 
+  const filteredUrls = activeFilter
+    ? activeFilter.type === "domain"
+      ? urls.filter(u => u.domain === activeFilter.value)
+      : activeFilter.type === "invalid"
+        ? invalidUrls
+        : missingUtm
+    : urls;
+
+  const toggleFilter = (type: "domain" | "invalid" | "missingUtm", value?: string) => {
+    if (activeFilter?.type === type && activeFilter?.value === value) {
+      setActiveFilter(null);
+    } else {
+      setActiveFilter({ type, value });
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setActiveFilter(null); }}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" data-testid={`button-audit-urls-${account.id}`}>
           <Link2 className="h-3 w-3 mr-1" /> URLs
@@ -545,32 +643,76 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
           <p className="text-sm text-muted-foreground py-4">No destination URLs found in this account's ads.</p>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-center gap-4 text-sm">
-              <span data-testid="text-url-total">{urls.length} URL{urls.length !== 1 ? "s" : ""} found</span>
-              <span>{domains.length} domain{domains.length !== 1 ? "s" : ""}</span>
+            <div className="flex items-center gap-2 text-sm flex-wrap">
+              <button
+                onClick={() => setActiveFilter(null)}
+                className={`px-2 py-0.5 rounded-md text-sm cursor-pointer transition-colors ${!activeFilter ? "bg-primary/10 text-primary font-medium" : "hover-elevate"}`}
+                data-testid="filter-url-all"
+              >
+                {urls.length} URL{urls.length !== 1 ? "s" : ""} found
+              </button>
               {invalidUrls.length > 0 && (
-                <span className="text-destructive font-medium">{invalidUrls.length} invalid</span>
+                <button
+                  onClick={() => toggleFilter("invalid")}
+                  className={`px-2 py-0.5 rounded-md text-sm cursor-pointer font-medium transition-colors ${activeFilter?.type === "invalid" ? "bg-destructive/15 text-destructive" : "text-destructive hover-elevate"}`}
+                  data-testid="filter-url-invalid"
+                >
+                  {invalidUrls.length} invalid
+                </button>
               )}
               {missingUtm.length > 0 && (
-                <span className="text-yellow-600 font-medium">{missingUtm.length} missing UTM</span>
+                <button
+                  onClick={() => toggleFilter("missingUtm")}
+                  className={`px-2 py-0.5 rounded-md text-sm cursor-pointer font-medium transition-colors ${activeFilter?.type === "missingUtm" ? "bg-yellow-500/15 text-yellow-600" : "text-yellow-600 hover-elevate"}`}
+                  data-testid="filter-url-missing-utm"
+                >
+                  {missingUtm.length} missing UTM
+                </button>
               )}
             </div>
+
+            {activeFilter && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>
+                  Showing {filteredUrls.length} of {urls.length} URLs
+                  {activeFilter.type === "domain" && ` in ${activeFilter.value}`}
+                  {activeFilter.type === "invalid" && " with invalid URLs"}
+                  {activeFilter.type === "missingUtm" && " missing UTM parameters"}
+                </span>
+                <button onClick={() => setActiveFilter(null)} className="text-primary hover:underline cursor-pointer" data-testid="button-clear-url-filter">
+                  Clear filter
+                </button>
+              </div>
+            )}
 
             {domains.length > 1 && (
               <div className="p-3 rounded-md bg-muted">
                 <p className="text-xs font-medium mb-1">Domains in use:</p>
                 <div className="flex flex-wrap gap-2">
                   {domains.map(d => (
-                    <span key={d} className={`text-xs px-2 py-0.5 rounded-full border ${d === "INVALID_URL" ? "border-destructive text-destructive" : "border-border"}`} data-testid={`text-domain-${d}`}>
-                      <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d}
-                    </span>
+                    <button
+                      key={d}
+                      onClick={() => toggleFilter("domain", d)}
+                      className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer transition-colors ${
+                        activeFilter?.type === "domain" && activeFilter.value === d
+                          ? d === "INVALID_URL"
+                            ? "border-destructive text-destructive bg-destructive/10"
+                            : "border-primary text-primary bg-primary/10"
+                          : d === "INVALID_URL"
+                            ? "border-destructive text-destructive hover-elevate"
+                            : "border-border hover-elevate"
+                      }`}
+                      data-testid={`filter-domain-${d}`}
+                    >
+                      <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d} ({urls.filter(u => u.domain === d).length})
+                    </button>
                   ))}
                 </div>
               </div>
             )}
 
             <div className="space-y-2">
-              {urls.map((entry: any, idx: number) => (
+              {filteredUrls.map((entry: any, idx: number) => (
                 <div key={idx} className="p-3 rounded-md border text-xs space-y-1" data-testid={`card-url-${idx}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">

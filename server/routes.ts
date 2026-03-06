@@ -113,6 +113,21 @@ export async function registerRoutes(
     res.status(201).json(issue);
   });
 
+  app.patch("/api/issues/bulk", async (req, res) => {
+    const { ids, ruleId, adAccountId, currentStatus, status } = req.body;
+    if (!status) return res.status(400).json({ message: "Status is required" });
+
+    let updated = 0;
+    if (ids && Array.isArray(ids) && ids.length > 0) {
+      updated = await storage.bulkUpdateIssues(ids, { status });
+    } else if (ruleId && adAccountId) {
+      updated = await storage.bulkUpdateIssuesByRule(ruleId, adAccountId, currentStatus || "", status);
+    } else {
+      return res.status(400).json({ message: "Provide ids array or ruleId+adAccountId" });
+    }
+    res.json({ updated });
+  });
+
   app.patch("/api/issues/:id", async (req, res) => {
     const updated = await storage.updateIssue(Number(req.params.id), req.body);
     if (!updated) return res.status(404).json({ message: "Issue not found" });

@@ -4,11 +4,13 @@ import {
   smokeTestAdAccount,
   getAds,
   getAdSets,
+  getCampaigns,
   getAccountPages,
   getImageMetadata,
   type MetaAd,
   type MetaAdSet,
   type MetaAdCreativeDetail,
+  type MetaCampaign,
 } from "./meta-api";
 import type { AdAccount, Credential, Client, InsertScanIssue } from "@shared/schema";
 import { log } from "./index";
@@ -35,6 +37,7 @@ interface Finding {
   adId?: string;
   adsetId?: string;
   campaignId?: string;
+  campaignObjective?: string;
   previewUrl?: string;
 }
 
@@ -129,9 +132,10 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
 
   log(`Smoke test passed for ${adAccount.accountId}, pulling data...`, "scanner");
 
-  const [adsResult, adSetsResult, pagesResult] = await Promise.all([
+  const [adsResult, adSetsResult, campaignsResult, pagesResult] = await Promise.all([
     getAds(adAccount.accountId, token),
     getAdSets(adAccount.accountId, token),
+    getCampaigns(adAccount.accountId, token),
     getAccountPages(adAccount.accountId, token),
   ]);
 
@@ -156,11 +160,17 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
 
   const ads = adsResult.ads || [];
   const adsets = adSetsResult.adsets || [];
+  const campaigns = campaignsResult.campaigns || [];
   const pages = pagesResult.pages || [];
 
   const adsetMap = new Map<string, MetaAdSet>();
   for (const adset of adsets) {
     adsetMap.set(adset.id, adset);
+  }
+
+  const campaignMap = new Map<string, MetaCampaign>();
+  for (const campaign of campaigns) {
+    campaignMap.set(campaign.id, campaign);
   }
 
   const activeAds = ads.filter(a => a.effective_status === "ACTIVE" || a.effective_status === "PAUSED");
@@ -173,18 +183,20 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
 
     const placements = getAdPlacements(ad, adsetMap);
     const adPreviewUrl = ad.preview_shareable_link || undefined;
+    const campaign = ad.campaign_id ? campaignMap.get(ad.campaign_id) : undefined;
+    const objective = campaign?.objective || undefined;
 
     const aiFindings = checkAiToggles(ad, creative, client);
-    findings.push(...aiFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
+    findings.push(...aiFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
 
     const placementFindings = await checkPlacementFit(ad, creative, placements, client);
-    findings.push(...placementFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
+    findings.push(...placementFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
 
     const creativeFindings = checkCreativeIntegrity(ad, creative, client, pages);
-    findings.push(...creativeFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
+    findings.push(...creativeFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
 
     const trackingFindings = checkTracking(ad, creative, client);
-    findings.push(...trackingFindings.map(f => ({ ...f, previewUrl: adPreviewUrl })));
+    findings.push(...trackingFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
   }
 
   await storage.deleteIssuesByAdAccount(adAccount.id);
@@ -206,6 +218,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
       adId: finding.adId,
       adsetId: finding.adsetId,
       campaignId: finding.campaignId,
+      campaignObjective: finding.campaignObjective,
       previewUrl: finding.previewUrl,
       status: "open",
       routeTo: "buyer",

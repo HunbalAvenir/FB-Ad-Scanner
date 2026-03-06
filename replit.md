@@ -13,7 +13,7 @@ Internal portal for managing Meta Ads quality assurance scanning across client a
 - **clients**: Client profiles with access modes, BM IDs, allowed page/IG IDs, domains, policy fields (allowedAiEnhancements, requiredUtm, allowedAspectRatios)
 - **meta_credentials**: System user tokens and user tokens with scopes, expiry tracking
 - **ad_accounts**: Ad accounts with coverage flags (identity, creative, placement, delivery)
-- **scan_issues**: Structured findings with ruleId, severity (blocker/high/medium/low), issueType (ai_toggle/placement_fit/creative_integrity/tracking/access), evidence (jsonb), recommendedFix, whyItMatters, adId/adsetId/campaignId, status, routeTo
+- **scan_issues**: Structured findings with ruleId, severity (blocker/high/medium/low), issueType (ai_toggle/placement_fit/creative_integrity/tracking/access), evidence (jsonb), recommendedFix, whyItMatters, adId/adsetId/campaignId, campaignObjective, status, routeTo
 - **users**: Basic user table (auth not yet implemented)
 
 ## Scanner Rule Engine
@@ -31,7 +31,7 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 - `/clients` - Client list with add client dialog
 - `/clients/:id` - Client detail with tabs: Accounts (per-account scan + URL audit buttons), Credentials, Issues (with Ads Manager links, preview links, recommendedFix), Onboarding
 - `/ad-accounts` - All ad accounts with coverage visualization
-- `/issues` - Issue tracker with Open/In Progress/Closed tabs, severity badges, rule IDs, evidence, Ads Manager deep links (Campaign/Ad Set/Ad), ad preview links
+- `/issues` - Issue tracker with Open/In Progress/Closed tabs, severity badges, rule IDs, evidence, Ads Manager deep links, filters (severity/type/rule/client/objective), bulk actions ("Resolve All"/"Dismiss All" for same rule), reopen resolved issues
 - `/credentials` - All credentials with scope and expiry info
 
 ## Meta API Integration
@@ -49,7 +49,7 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 ## Key Files
 - `shared/schema.ts` - All Drizzle schemas and Zod validators
 - `server/db.ts` - Database connection
-- `server/storage.ts` - Storage interface with deleteIssuesByAdAccount, getDashboardStats (blocker/high/medium counts)
+- `server/storage.ts` - Storage interface with deleteIssuesByAdAccount, getDashboardStats (blocker/high/medium counts), bulkUpdateIssues, bulkUpdateIssuesByRule
 - `server/routes.ts` - REST API routes
 - `server/meta-api.ts` - Meta Marketing API client with getImageMetadata helper
 - `server/scanner.ts` - Rule engine scanner (AI, Placement, Creative, Tracking rules)
