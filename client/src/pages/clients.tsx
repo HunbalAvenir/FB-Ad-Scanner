@@ -408,34 +408,31 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
   const [name, setName] = useState("");
   const [accessMode, setAccessMode] = useState("unknown");
   const [notes, setNotes] = useState("");
-  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number>>(new Set());
+  const [selectedMetaIds, setSelectedMetaIds] = useState<Set<string>>(new Set());
   const [accountSearch, setAccountSearch] = useState("");
-  const [manualAccountId, setManualAccountId] = useState("");
-  const [manualAccountName, setManualAccountName] = useState("");
 
-  const { data: allAccounts, isLoading: loadingAccounts } = useQuery<AdAccount[]>({ queryKey: ["/api/ad-accounts"] });
-  const { data: allClients } = useQuery<Client[]>({ queryKey: ["/api/clients"] });
+  const { data: authStatus } = useQuery<{ authenticated: boolean; name: string | null }>({
+    queryKey: ["/api/auth/facebook/status"],
+  });
 
-  const clientNameMap = useMemo(() => {
-    const map = new Map<number, string>();
-    allClients?.forEach(c => map.set(c.id, c.name));
-    return map;
-  }, [allClients]);
+  const { data: metaAccounts, isLoading: loadingMetaAccounts, error: metaError } = useQuery<MetaAccount[]>({
+    queryKey: ["/api/meta/user-ad-accounts"],
+    enabled: !!authStatus?.authenticated,
+  });
 
-  const unassignedAccounts = useMemo(() => {
-    if (!allAccounts) return [];
-    return allAccounts;
-  }, [allAccounts]);
+  const { data: existingAccounts } = useQuery<AdAccount[]>({ queryKey: ["/api/ad-accounts"] });
+  const existingIds = useMemo(() => new Set(existingAccounts?.map(a => a.accountId) || []), [existingAccounts]);
 
   const filteredAccounts = useMemo(() => {
+    if (!metaAccounts) return [];
     const q = accountSearch.toLowerCase();
-    return unassignedAccounts.filter(a =>
-      !q || a.accountName.toLowerCase().includes(q) || a.accountId.toLowerCase().includes(q)
+    return metaAccounts.filter(a =>
+      !q || a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q) || (a.business_name || "").toLowerCase().includes(q)
     );
-  }, [unassignedAccounts, accountSearch]);
+  }, [metaAccounts, accountSearch]);
 
-  const toggleAccount = (id: number) => {
-    setSelectedAccountIds(prev => {
+  const toggleAccount = (id: string) => {
+    setSelectedMetaIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -445,21 +442,16 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
 
   const mutation = useMutation({
     mutationFn: async () => {
-      const reassignAccountIds = Array.from(selectedAccountIds);
-      const manualAccounts: { accountId: string; accountName: string }[] = [];
-      if (manualAccountId.trim()) {
-        manualAccounts.push({
-          accountId: manualAccountId.trim(),
-          accountName: manualAccountName.trim() || manualAccountId.trim(),
-        });
-      }
+      const adAccountSelections = Array.from(selectedMetaIds).map(id => {
+        const acct = metaAccounts?.find(a => a.id === id);
+        return { accountId: id, accountName: acct?.name || id };
+      });
       await apiRequest("POST", "/api/clients", {
         name,
         accessMode,
         notes: notes || null,
         status: "onboarding",
-        reassignAccountIds,
-        adAccountSelections: manualAccounts,
+        adAccountSelections,
       });
     },
     onSuccess: () => {
@@ -471,6 +463,14 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const logoutMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/auth/facebook/logout"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/facebook/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/meta/user-ad-accounts"] });
     },
   });
 
@@ -498,80 +498,98 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
 
       <div className="space-y-2">
         <Label>Ad Accounts</Label>
-        <p className="text-xs text-muted-foreground">Select existing accounts to assign to this client</p>
-        {loadingAccounts ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground py-3">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading accounts...
-          </div>
-        ) : unassignedAccounts.length > 0 ? (
-          <div className="space-y-2">
-            {unassignedAccounts.length > 5 && (
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={accountSearch}
-                  onChange={e => setAccountSearch(e.target.value)}
-                  placeholder="Search accounts..."
-                  className="pl-9"
-                  data-testid="input-account-search"
-                />
-              </div>
-            )}
-            <div className="border rounded-md max-h-48 overflow-y-auto">
-              {filteredAccounts.length === 0 ? (
-                <p className="text-sm text-muted-foreground p-3 text-center">No accounts match your search</p>
-              ) : (
-                filteredAccounts.map(acct => {
-                  const isSelected = selectedAccountIds.has(acct.id);
-                  const currentClient = clientNameMap.get(acct.clientId);
-                  return (
-                    <label
-                      key={acct.id}
-                      className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-accent/50 border-b last:border-b-0 transition-colors ${isSelected ? "bg-accent/30" : ""}`}
-                      data-testid={`account-option-${acct.id}`}
-                    >
-                      <Checkbox
-                        checked={isSelected}
-                        onCheckedChange={() => toggleAccount(acct.id)}
-                        data-testid={`checkbox-account-${acct.id}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate">{acct.accountName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {acct.accountId}
-                          {currentClient ? ` · Currently: ${currentClient}` : ""}
-                        </p>
-                      </div>
-                    </label>
-                  );
-                })
-              )}
-            </div>
-            {selectedAccountIds.size > 0 && (
-              <p className="text-xs text-muted-foreground">{selectedAccountIds.size} account{selectedAccountIds.size !== 1 ? "s" : ""} selected</p>
-            )}
+        {!authStatus?.authenticated ? (
+          <div className="border rounded-md p-4 space-y-3">
+            <p className="text-sm text-muted-foreground">Connect your Facebook account to see all ad accounts you have access to.</p>
+            <Button
+              variant="outline"
+              className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white border-none"
+              onClick={() => { window.location.href = "/api/auth/facebook"; }}
+              data-testid="button-facebook-login"
+            >
+              <SiFacebook className="h-4 w-4 mr-2" /> Log in with Facebook
+            </Button>
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground py-1">No accounts in the system yet. Use Import Accounts to add them.</p>
-        )}
-
-        <details className="pt-1">
-          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">Add a new account ID manually</summary>
-          <div className="grid grid-cols-2 gap-2 mt-2">
-            <Input
-              value={manualAccountId}
-              onChange={e => setManualAccountId(e.target.value)}
-              placeholder="act_123456789"
-              data-testid="input-manual-account-id"
-            />
-            <Input
-              value={manualAccountName}
-              onChange={e => setManualAccountName(e.target.value)}
-              placeholder="Account name"
-              data-testid="input-manual-account-name"
-            />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">
+                Connected as {authStatus.name}
+              </p>
+              <button
+                onClick={() => logoutMutation.mutate()}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                data-testid="button-fb-disconnect"
+              >
+                Disconnect
+              </button>
+            </div>
+            {loadingMetaAccounts ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-3">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading accounts from Facebook...
+              </div>
+            ) : metaError ? (
+              <p className="text-sm text-destructive py-2">Failed to load accounts. Try disconnecting and logging in again.</p>
+            ) : metaAccounts && metaAccounts.length > 0 ? (
+              <>
+                {metaAccounts.length > 5 && (
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      value={accountSearch}
+                      onChange={e => setAccountSearch(e.target.value)}
+                      placeholder="Search accounts..."
+                      className="pl-9"
+                      data-testid="input-account-search"
+                    />
+                  </div>
+                )}
+                <div className="border rounded-md max-h-48 overflow-y-auto">
+                  {filteredAccounts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground p-3 text-center">No accounts match your search</p>
+                  ) : (
+                    filteredAccounts.map(acct => {
+                      const isSelected = selectedMetaIds.has(acct.id);
+                      const alreadyInSystem = existingIds.has(acct.id);
+                      return (
+                        <label
+                          key={acct.id}
+                          className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-accent/50 border-b last:border-b-0 transition-colors ${
+                            alreadyInSystem ? "opacity-50" : ""
+                          } ${isSelected ? "bg-accent/30" : ""}`}
+                          data-testid={`account-option-${acct.id}`}
+                        >
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={() => toggleAccount(acct.id)}
+                            disabled={alreadyInSystem}
+                            data-testid={`checkbox-account-${acct.id}`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate">{acct.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {acct.id}
+                              {acct.business_name ? ` · ${acct.business_name}` : ""}
+                              {alreadyInSystem ? " · Already added" : ""}
+                            </p>
+                          </div>
+                          {acct.account_status === 1 && (
+                            <span className="text-xs text-emerald-600 dark:text-emerald-400 shrink-0">Active</span>
+                          )}
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                {selectedMetaIds.size > 0 && (
+                  <p className="text-xs text-muted-foreground">{selectedMetaIds.size} account{selectedMetaIds.size !== 1 ? "s" : ""} selected</p>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground py-2">No ad accounts found in your Facebook account.</p>
+            )}
           </div>
-        </details>
+        )}
       </div>
 
       <div className="space-y-2">
