@@ -10,7 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, AlertOctagon, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw, Filter, X, Info } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, AlertOctagon, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw, Filter, X, Info, Pencil } from "lucide-react";
 import { useState, useMemo } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -137,6 +138,7 @@ export default function ClientDetailPage() {
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-semibold tracking-tight truncate" data-testid="text-client-name">{client.name}</h1>
             <StatusBadge status={client.status} />
+            <EditClientDialog client={client} />
           </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             <AccessModeBadge mode={client.accessMode} />
@@ -990,6 +992,7 @@ function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: nu
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <EditAdAccountDialog account={account} clientId={clientId} />
             <UrlAuditDialog account={account} />
             <Button
               variant="outline"
@@ -1018,6 +1021,157 @@ function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: nu
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function EditClientDialog({ client }: { client: Client }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(client.name);
+  const [status, setStatus] = useState(client.status);
+  const [accessMode, setAccessMode] = useState(client.accessMode);
+  const [notes, setNotes] = useState(client.notes || "");
+
+  const resetForm = () => {
+    setName(client.name);
+    setStatus(client.status);
+    setAccessMode(client.accessMode);
+    setNotes(client.notes || "");
+  };
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/clients/${client.id}`, {
+        name,
+        status,
+        accessMode,
+        notes: notes || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", client.id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Client updated" });
+      setOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v) resetForm(); }}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-7 w-7" data-testid="button-edit-client">
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit Client</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="edit-name">Client Name</Label>
+            <Input id="edit-name" value={name} onChange={e => setName(e.target.value)} data-testid="input-edit-client-name" />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-status">Status</Label>
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger data-testid="select-edit-client-status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="onboarding">Onboarding</SelectItem>
+                <SelectItem value="paused">Paused</SelectItem>
+                <SelectItem value="degraded">Degraded</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-access">Access Mode</Label>
+            <Select value={accessMode} onValueChange={setAccessMode}>
+              <SelectTrigger data-testid="select-edit-client-access">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="partner">Partner Access</SelectItem>
+                <SelectItem value="user">User Access</SelectItem>
+                <SelectItem value="both">Both</SelectItem>
+                <SelectItem value="public_only">Public Only</SelectItem>
+                <SelectItem value="unknown">Unknown</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-notes">Notes</Label>
+            <Textarea id="edit-notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Primary contact, special instructions..." data-testid="input-edit-client-notes" />
+          </div>
+          <Button onClick={() => mutation.mutate()} disabled={!name || mutation.isPending} className="w-full" data-testid="button-save-client">
+            {mutation.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditAdAccountDialog({ account, clientId }: { account: AdAccount; clientId: number }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [accountName, setAccountName] = useState(account.accountName);
+  const [accountId, setAccountId] = useState(account.accountId);
+
+  const resetForm = () => {
+    setAccountName(account.accountName);
+    setAccountId(account.accountId);
+  };
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/ad-accounts/${account.id}`, {
+        accountName,
+        accountId,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", clientId, "ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ad-accounts"] });
+      toast({ title: "Ad account updated" });
+      setOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v) resetForm(); }}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" data-testid={`button-edit-account-${account.id}`}>
+          <Pencil className="h-3 w-3 mr-1" /> Edit
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit Ad Account</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="edit-account-name">Account Name</Label>
+            <Input id="edit-account-name" value={accountName} onChange={e => setAccountName(e.target.value)} data-testid="input-edit-account-name" />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-account-id">Account ID</Label>
+            <Input id="edit-account-id" value={accountId} onChange={e => setAccountId(e.target.value)} placeholder="act_123456789" data-testid="input-edit-account-id" />
+          </div>
+          <Button onClick={() => mutation.mutate()} disabled={!accountName || !accountId || mutation.isPending} className="w-full" data-testid="button-save-account">
+            {mutation.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
