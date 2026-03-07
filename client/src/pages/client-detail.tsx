@@ -57,6 +57,8 @@ export default function ClientDetailPage() {
   const [filterRule, setFilterRule] = useState("all");
   const [filterObjective, setFilterObjective] = useState("all");
   const [filterAccount, setFilterAccount] = useState("all");
+  const [urlAccountId, setUrlAccountId] = useState<number | null>(null);
+  const selectedUrlAccount = accounts?.find(a => a.id === urlAccountId) || accounts?.[0] || null;
 
   const issueFilterOptions = useMemo(() => {
     const severities = [...new Set(clientIssues.map(i => i.severity))];
@@ -165,6 +167,12 @@ export default function ClientDetailPage() {
           <TabsTrigger value="accounts" data-testid="tab-accounts">
             <Radio className="h-3.5 w-3.5 mr-1" /> Accounts ({accounts?.length || 0})
           </TabsTrigger>
+          <TabsTrigger value="urls" data-testid="tab-urls">
+            <Link2 className="h-3.5 w-3.5 mr-1" /> URLs
+          </TabsTrigger>
+          <TabsTrigger value="scan" data-testid="tab-scan">
+            <Scan className="h-3.5 w-3.5 mr-1" /> Scan
+          </TabsTrigger>
           <TabsTrigger value="credentials" data-testid="tab-credentials">
             <Shield className="h-3.5 w-3.5 mr-1" /> Credentials ({credentials?.length || 0})
           </TabsTrigger>
@@ -193,6 +201,38 @@ export default function ClientDetailPage() {
               ))}
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="urls" className="mt-4 space-y-4">
+          {!accounts || accounts.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <Link2 className="h-10 w-10 text-muted-foreground mb-3 opacity-40" />
+                <p className="font-medium">No ad accounts</p>
+                <p className="text-sm text-muted-foreground">Add an ad account first to audit URLs.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {accounts.length > 1 && (
+                <Select value={String(selectedUrlAccount?.id || "")} onValueChange={v => setUrlAccountId(Number(v))}>
+                  <SelectTrigger className="w-72" data-testid="select-url-account">
+                    <SelectValue placeholder="Select account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map(a => (
+                      <SelectItem key={a.id} value={String(a.id)}>{a.accountName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {selectedUrlAccount && <UrlAuditInline account={selectedUrlAccount} />}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="scan" className="mt-4 space-y-4">
+          <ScanTab accounts={accounts || []} clientId={clientId} issues={clientIssues} />
         </TabsContent>
 
         <TabsContent value="credentials" className="mt-4 space-y-4">
@@ -759,14 +799,14 @@ interface AdUrlEntry {
   utmParams: Record<string, string>;
   previewUrl?: string;
   effectiveStatus: string;
+  sourceType?: string;
+  urlTags?: string;
 }
 
-function UrlAuditDialog({ account }: { account: AdAccount }) {
-  const [open, setOpen] = useState(false);
+function UrlAuditInline({ account }: { account: AdAccount }) {
   const [activeFilter, setActiveFilter] = useState<{ type: "domain" | "invalid" | "missingUtm" | "status"; value?: string } | null>(null);
   const { data, isLoading } = useQuery<{ urls: AdUrlEntry[]; error?: string }>({
     queryKey: [`/api/ad-accounts/${account.id}/urls`],
-    enabled: open,
   });
 
   const urls = data?.urls || [];
@@ -798,193 +838,190 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-8" />
+        <Skeleton className="h-8" />
+        <Skeleton className="h-8" />
+      </div>
+    );
+  }
+
+  if (data?.error) {
+    return <div className="p-4 text-sm text-destructive bg-destructive/5 rounded-md">{data.error}</div>;
+  }
+
+  if (urls.length === 0) {
+    return <p className="text-sm text-muted-foreground py-4">No destination URLs found in this account's ads.</p>;
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setActiveFilter(null); }}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" data-testid={`button-audit-urls-${account.id}`}>
-          <Link2 className="h-3 w-3 mr-1" /> URLs
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>URL Audit: {account.accountName}</DialogTitle>
-        </DialogHeader>
-        {isLoading ? (
-          <div className="space-y-2">
-            <Skeleton className="h-8" />
-            <Skeleton className="h-8" />
-            <Skeleton className="h-8" />
-          </div>
-        ) : data?.error ? (
-          <div className="p-4 text-sm text-destructive bg-destructive/5 rounded-md">{data.error}</div>
-        ) : urls.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-4">No destination URLs found in this account's ads.</p>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm flex-wrap">
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 text-sm flex-wrap">
+        <button
+          onClick={() => setActiveFilter(null)}
+          className={`px-2 py-0.5 rounded-md text-sm cursor-pointer transition-colors ${!activeFilter ? "bg-primary/10 text-primary font-medium" : "hover-elevate"}`}
+          data-testid="filter-url-all"
+        >
+          {urls.length} URL{urls.length !== 1 ? "s" : ""} found
+        </button>
+        {invalidUrls.length > 0 && (
+          <button
+            onClick={() => toggleFilter("invalid")}
+            className={`px-2 py-0.5 rounded-md text-sm cursor-pointer font-medium transition-colors ${activeFilter?.type === "invalid" ? "bg-destructive/15 text-destructive" : "text-destructive hover-elevate"}`}
+            data-testid="filter-url-invalid"
+          >
+            {invalidUrls.length} invalid
+          </button>
+        )}
+        {missingUtm.length > 0 && (
+          <button
+            onClick={() => toggleFilter("missingUtm")}
+            className={`px-2 py-0.5 rounded-md text-sm cursor-pointer font-medium transition-colors ${activeFilter?.type === "missingUtm" ? "bg-yellow-500/15 text-yellow-600" : "text-yellow-600 hover-elevate"}`}
+            data-testid="filter-url-missing-utm"
+          >
+            {missingUtm.length} missing UTM
+          </button>
+        )}
+      </div>
+
+      {statuses.length > 1 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-muted-foreground">Status:</span>
+          {statuses.map(([status, count]) => (
+            <button
+              key={status}
+              onClick={() => toggleFilter("status", status)}
+              className={`px-2 py-0.5 rounded-md text-xs cursor-pointer font-medium transition-colors ${
+                activeFilter?.type === "status" && activeFilter.value === status
+                  ? status === "ACTIVE" ? "bg-emerald-500/15 text-emerald-600" : "bg-muted text-foreground"
+                  : status === "ACTIVE" ? "text-emerald-600 hover-elevate" : "text-muted-foreground hover-elevate"
+              }`}
+              data-testid={`filter-status-${status}`}
+            >
+              {status} ({count})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {activeFilter && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            Showing {filteredUrls.length} of {urls.length} URLs
+            {activeFilter.type === "domain" && ` in ${activeFilter.value}`}
+            {activeFilter.type === "invalid" && " with invalid URLs"}
+            {activeFilter.type === "missingUtm" && " missing UTM parameters"}
+            {activeFilter.type === "status" && ` with status ${activeFilter.value}`}
+          </span>
+          <button onClick={() => setActiveFilter(null)} className="text-primary hover:underline cursor-pointer" data-testid="button-clear-url-filter">
+            Clear filter
+          </button>
+        </div>
+      )}
+
+      {domains.length > 1 && (
+        <div className="p-3 rounded-md bg-muted">
+          <p className="text-xs font-medium mb-1">Domains in use:</p>
+          <div className="flex flex-wrap gap-2">
+            {domains.map(d => (
               <button
-                onClick={() => setActiveFilter(null)}
-                className={`px-2 py-0.5 rounded-md text-sm cursor-pointer transition-colors ${!activeFilter ? "bg-primary/10 text-primary font-medium" : "hover-elevate"}`}
-                data-testid="filter-url-all"
+                key={d}
+                onClick={() => toggleFilter("domain", d)}
+                className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer transition-colors ${
+                  activeFilter?.type === "domain" && activeFilter.value === d
+                    ? d === "INVALID_URL"
+                      ? "border-destructive text-destructive bg-destructive/10"
+                      : "border-primary text-primary bg-primary/10"
+                    : d === "INVALID_URL"
+                      ? "border-destructive text-destructive hover-elevate"
+                      : "border-border hover-elevate"
+                }`}
+                data-testid={`filter-domain-${d}`}
               >
-                {urls.length} URL{urls.length !== 1 ? "s" : ""} found
+                <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d} ({urls.filter(u => u.domain === d).length})
               </button>
-              {invalidUrls.length > 0 && (
-                <button
-                  onClick={() => toggleFilter("invalid")}
-                  className={`px-2 py-0.5 rounded-md text-sm cursor-pointer font-medium transition-colors ${activeFilter?.type === "invalid" ? "bg-destructive/15 text-destructive" : "text-destructive hover-elevate"}`}
-                  data-testid="filter-url-invalid"
-                >
-                  {invalidUrls.length} invalid
-                </button>
-              )}
-              {missingUtm.length > 0 && (
-                <button
-                  onClick={() => toggleFilter("missingUtm")}
-                  className={`px-2 py-0.5 rounded-md text-sm cursor-pointer font-medium transition-colors ${activeFilter?.type === "missingUtm" ? "bg-yellow-500/15 text-yellow-600" : "text-yellow-600 hover-elevate"}`}
-                  data-testid="filter-url-missing-utm"
-                >
-                  {missingUtm.length} missing UTM
-                </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {filteredUrls.map((entry, idx) => (
+          <div key={idx} className="p-3 rounded-md border text-xs space-y-1" data-testid={`card-url-${idx}`}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="font-medium text-sm truncate">{entry.adName}</p>
+                  {entry.sourceType && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border bg-muted text-muted-foreground shrink-0">
+                      {entry.sourceType === "shared_post" ? "Shared Post" :
+                       entry.sourceType === "link_url" ? "Link" :
+                       entry.sourceType === "link_data" ? "Link Data" :
+                       entry.sourceType === "video_data" ? "Video" :
+                       entry.sourceType === "carousel" ? "Carousel" :
+                       entry.sourceType === "asset_feed" ? "Dynamic" :
+                       entry.sourceType}
+                    </span>
+                  )}
+                </div>
+                <p className="text-muted-foreground font-mono break-all mt-0.5">{entry.destinationUrl}</p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {entry.domain === "INVALID_URL" && (
+                  <span className="text-destructive font-medium px-1.5 py-0.5 bg-destructive/10 rounded">Invalid</span>
+                )}
+                {!entry.hasUtm && entry.domain !== "INVALID_URL" && (
+                  <span className="text-yellow-600 font-medium px-1.5 py-0.5 bg-yellow-100 dark:bg-yellow-900/20 rounded">No UTM</span>
+                )}
+                {entry.hasUtm && (
+                  <span className="text-primary font-medium px-1.5 py-0.5 bg-primary/10 rounded">UTM OK</span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-3 text-muted-foreground flex-wrap">
+              <span>Status: {entry.effectiveStatus}</span>
+              <a href={`https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entry.adId}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-url-ad-${idx}`}>
+                Open in Ads Manager <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+              {entry.previewUrl && (
+                <a href={entry.previewUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5 text-primary" data-testid={`link-url-preview-${idx}`}>
+                  <Eye className="h-2.5 w-2.5" /> Preview
+                </a>
               )}
             </div>
-
-            {statuses.length > 1 && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs text-muted-foreground">Status:</span>
-                {statuses.map(([status, count]) => (
-                  <button
-                    key={status}
-                    onClick={() => toggleFilter("status", status)}
-                    className={`px-2 py-0.5 rounded-md text-xs cursor-pointer font-medium transition-colors ${
-                      activeFilter?.type === "status" && activeFilter.value === status
-                        ? status === "ACTIVE" ? "bg-emerald-500/15 text-emerald-600" : "bg-muted text-foreground"
-                        : status === "ACTIVE" ? "text-emerald-600 hover-elevate" : "text-muted-foreground hover-elevate"
-                    }`}
-                    data-testid={`filter-status-${status}`}
-                  >
-                    {status} ({count})
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {activeFilter && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>
-                  Showing {filteredUrls.length} of {urls.length} URLs
-                  {activeFilter.type === "domain" && ` in ${activeFilter.value}`}
-                  {activeFilter.type === "invalid" && " with invalid URLs"}
-                  {activeFilter.type === "missingUtm" && " missing UTM parameters"}
-                  {activeFilter.type === "status" && ` with status ${activeFilter.value}`}
-                </span>
-                <button onClick={() => setActiveFilter(null)} className="text-primary hover:underline cursor-pointer" data-testid="button-clear-url-filter">
-                  Clear filter
-                </button>
-              </div>
-            )}
-
-            {domains.length > 1 && (
-              <div className="p-3 rounded-md bg-muted">
-                <p className="text-xs font-medium mb-1">Domains in use:</p>
-                <div className="flex flex-wrap gap-2">
-                  {domains.map(d => (
-                    <button
-                      key={d}
-                      onClick={() => toggleFilter("domain", d)}
-                      className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer transition-colors ${
-                        activeFilter?.type === "domain" && activeFilter.value === d
-                          ? d === "INVALID_URL"
-                            ? "border-destructive text-destructive bg-destructive/10"
-                            : "border-primary text-primary bg-primary/10"
-                          : d === "INVALID_URL"
-                            ? "border-destructive text-destructive hover-elevate"
-                            : "border-border hover-elevate"
-                      }`}
-                      data-testid={`filter-domain-${d}`}
-                    >
-                      <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d} ({urls.filter(u => u.domain === d).length})
-                    </button>
+            {entry.hasUtm && Object.keys(entry.utmParams || {}).length > 0 && (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">UTM Parameters</summary>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {Object.entries(entry.utmParams).map(([k, v]: [string, any]) => (
+                    <span key={k} className="font-mono bg-muted px-1.5 py-0.5 rounded">{k}={String(v)}</span>
                   ))}
                 </div>
-              </div>
+              </details>
             )}
-
-            <div className="space-y-2">
-              {filteredUrls.map((entry: any, idx: number) => (
-                <div key={idx} className="p-3 rounded-md border text-xs space-y-1" data-testid={`card-url-${idx}`}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-sm truncate">{entry.adName}</p>
-                        {entry.sourceType && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded border bg-muted text-muted-foreground shrink-0">
-                            {entry.sourceType === "shared_post" ? "Shared Post" :
-                             entry.sourceType === "link_url" ? "Link" :
-                             entry.sourceType === "link_data" ? "Link Data" :
-                             entry.sourceType === "video_data" ? "Video" :
-                             entry.sourceType === "carousel" ? "Carousel" :
-                             entry.sourceType === "asset_feed" ? "Dynamic" :
-                             entry.sourceType}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-muted-foreground font-mono break-all mt-0.5">{entry.destinationUrl}</p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {entry.domain === "INVALID_URL" && (
-                        <span className="text-destructive font-medium px-1.5 py-0.5 bg-destructive/10 rounded">Invalid</span>
-                      )}
-                      {!entry.hasUtm && entry.domain !== "INVALID_URL" && (
-                        <span className="text-yellow-600 font-medium px-1.5 py-0.5 bg-yellow-100 dark:bg-yellow-900/20 rounded">No UTM</span>
-                      )}
-                      {entry.hasUtm && (
-                        <span className="text-primary font-medium px-1.5 py-0.5 bg-primary/10 rounded">UTM OK</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 text-muted-foreground flex-wrap">
-                    <span>Status: {entry.effectiveStatus}</span>
-                    <a href={`https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entry.adId}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-url-ad-${idx}`}>
-                      Open in Ads Manager <ExternalLink className="h-2.5 w-2.5" />
-                    </a>
-                    {entry.previewUrl && (
-                      <a href={entry.previewUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5 text-primary" data-testid={`link-url-preview-${idx}`}>
-                        <Eye className="h-2.5 w-2.5" /> Preview
-                      </a>
-                    )}
-                  </div>
-                  {entry.hasUtm && Object.keys(entry.utmParams || {}).length > 0 && (
-                    <details className="mt-1">
-                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">UTM Parameters</summary>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {Object.entries(entry.utmParams).map(([k, v]: [string, any]) => (
-                          <span key={k} className="font-mono bg-muted px-1.5 py-0.5 rounded">{k}={String(v)}</span>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                  {entry.urlTags && !entry.hasUtm && (
-                    <details className="mt-1">
-                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">URL Tags</summary>
-                      <p className="mt-1 font-mono bg-muted px-2 py-1 rounded break-all">{entry.urlTags}</p>
-                    </details>
-                  )}
-                </div>
-              ))}
-            </div>
+            {entry.urlTags && !entry.hasUtm && (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">URL Tags</summary>
+                <p className="mt-1 font-mono bg-muted px-2 py-1 rounded break-all">{entry.urlTags}</p>
+              </details>
+            )}
           </div>
-        )}
-      </DialogContent>
-    </Dialog>
+        ))}
+      </div>
+    </div>
   );
 }
 
-function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: number }) {
+function ScanTab({ accounts, clientId, issues }: { accounts: AdAccount[]; clientId: number; issues: ScanIssue[] }) {
   const { toast } = useToast();
+  const [scanningAccountId, setScanningAccountId] = useState<number | null>(null);
+
   const scanMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/scan/account/${account.id}`);
+    mutationFn: async (accountId: number) => {
+      setScanningAccountId(accountId);
+      const res = await apiRequest("POST", `/api/scan/account/${accountId}`);
       return res.json();
     },
     onSuccess: (data: any) => {
@@ -999,12 +1036,121 @@ function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: nu
           : data.error || "Unknown error",
         variant: data.success ? "default" : "destructive",
       });
+      setScanningAccountId(null);
     },
     onError: (err: Error) => {
       toast({ title: "Scan failed", description: err.message, variant: "destructive" });
+      setScanningAccountId(null);
     },
   });
 
+  const scanAllMutation = useMutation({
+    mutationFn: async () => {
+      const results = [];
+      for (const account of accounts) {
+        setScanningAccountId(account.id);
+        const res = await apiRequest("POST", `/api/scan/account/${account.id}`);
+        results.push(await res.json());
+      }
+      return results;
+    },
+    onSuccess: (results: any[]) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", clientId, "ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/issues"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      const total = results.reduce((sum, r) => sum + (r.issuesFound || 0), 0);
+      toast({ title: "Scan complete", description: `Scanned ${results.length} account${results.length !== 1 ? "s" : ""}, found ${total} issue${total !== 1 ? "s" : ""}.` });
+      setScanningAccountId(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Scan failed", description: err.message, variant: "destructive" });
+      setScanningAccountId(null);
+    },
+  });
+
+  if (accounts.length === 0) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center py-12">
+          <Scan className="h-10 w-10 text-muted-foreground mb-3 opacity-40" />
+          <p className="font-medium">No ad accounts</p>
+          <p className="text-sm text-muted-foreground">Add an ad account first to run scans.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Button
+          onClick={() => scanAllMutation.mutate()}
+          disabled={scanAllMutation.isPending || scanMutation.isPending}
+          data-testid="button-scan-all"
+        >
+          {scanAllMutation.isPending ? (
+            <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Scanning all accounts...</>
+          ) : (
+            <><Scan className="h-4 w-4 mr-2" /> Scan All Accounts</>
+          )}
+        </Button>
+      </div>
+
+      <div className="space-y-3">
+        {accounts.map(account => (
+          <Card key={account.id} data-testid={`card-scan-account-${account.id}`}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium text-sm">{account.accountName}</p>
+                  <p className="text-xs text-muted-foreground font-mono">{account.accountId}</p>
+                  {account.lastScanSuccessAt && (
+                    <p className="text-xs text-muted-foreground mt-0.5">Last scan: {formatDate(new Date(account.lastScanSuccessAt))}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => scanMutation.mutate(account.id)}
+                    disabled={scanMutation.isPending || scanAllMutation.isPending}
+                    data-testid={`button-scan-account-${account.id}`}
+                  >
+                    {scanningAccountId === account.id && (scanMutation.isPending || scanAllMutation.isPending) ? (
+                      <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Scanning</>
+                    ) : (
+                      <><Scan className="h-3 w-3 mr-1" /> Scan</>
+                    )}
+                  </Button>
+                  <StatusBadge status={account.status} />
+                </div>
+              </div>
+              {account.lastScanError && (
+                <div className="mt-3 p-2 rounded-md bg-destructive/5 border border-destructive/10">
+                  <p className="text-xs text-destructive">{account.lastScanError}</p>
+                  {account.lastScanErrorCode && (
+                    <p className="text-xs text-muted-foreground mt-0.5 font-mono">{account.lastScanErrorCode}</p>
+                  )}
+                </div>
+              )}
+              <CoverageWidget account={account} />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {issues.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">{issues.length} issue{issues.length !== 1 ? "s" : ""} found</p>
+          <p className="text-xs text-muted-foreground">View the Issues tab for full details.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: number }) {
   const actNum = account.accountId.replace("act_", "");
 
   return (
@@ -1021,32 +1167,10 @@ function AdAccountCard({ account, clientId }: { account: AdAccount; clientId: nu
           </div>
           <div className="flex items-center gap-2">
             <EditAdAccountDialog account={account} clientId={clientId} />
-            <UrlAuditDialog account={account} />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => scanMutation.mutate()}
-              disabled={scanMutation.isPending}
-              data-testid={`button-scan-account-${account.id}`}
-            >
-              {scanMutation.isPending ? (
-                <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Scanning</>
-              ) : (
-                <><Scan className="h-3 w-3 mr-1" /> Scan</>
-              )}
-            </Button>
             <StatusBadge status={account.status} />
           </div>
         </div>
         <CoverageWidget account={account} />
-        {account.lastScanError && (
-          <div className="mt-3 p-2 rounded-md bg-destructive/5 border border-destructive/10" data-testid={`text-scan-error-${account.id}`}>
-            <p className="text-xs text-destructive">{account.lastScanError}</p>
-            {account.lastScanErrorCode && (
-              <p className="text-xs text-muted-foreground mt-0.5 font-mono">{account.lastScanErrorCode}</p>
-            )}
-          </div>
-        )}
       </CardContent>
     </Card>
   );
