@@ -763,7 +763,7 @@ interface AdUrlEntry {
 
 function UrlAuditDialog({ account }: { account: AdAccount }) {
   const [open, setOpen] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<{ type: "domain" | "invalid" | "missingUtm"; value?: string } | null>(null);
+  const [activeFilter, setActiveFilter] = useState<{ type: "domain" | "invalid" | "missingUtm" | "status"; value?: string } | null>(null);
   const { data, isLoading } = useQuery<{ urls: AdUrlEntry[]; error?: string }>({
     queryKey: [`/api/ad-accounts/${account.id}/urls`],
     enabled: open,
@@ -774,16 +774,23 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
   const invalidUrls = urls.filter(u => u.domain === "INVALID_URL");
   const missingUtm = urls.filter(u => !u.hasUtm);
   const actNum = account.accountId.replace("act_", "");
+  const statuses = useMemo(() => {
+    const counts: Record<string, number> = {};
+    urls.forEach(u => { counts[u.effectiveStatus] = (counts[u.effectiveStatus] || 0) + 1; });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [urls]);
 
   const filteredUrls = activeFilter
     ? activeFilter.type === "domain"
       ? urls.filter(u => u.domain === activeFilter.value)
       : activeFilter.type === "invalid"
         ? invalidUrls
-        : missingUtm
+        : activeFilter.type === "status"
+          ? urls.filter(u => u.effectiveStatus === activeFilter.value)
+          : missingUtm
     : urls;
 
-  const toggleFilter = (type: "domain" | "invalid" | "missingUtm", value?: string) => {
+  const toggleFilter = (type: "domain" | "invalid" | "missingUtm" | "status", value?: string) => {
     if (activeFilter?.type === type && activeFilter?.value === value) {
       setActiveFilter(null);
     } else {
@@ -842,6 +849,26 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
               )}
             </div>
 
+            {statuses.length > 1 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-muted-foreground">Status:</span>
+                {statuses.map(([status, count]) => (
+                  <button
+                    key={status}
+                    onClick={() => toggleFilter("status", status)}
+                    className={`px-2 py-0.5 rounded-md text-xs cursor-pointer font-medium transition-colors ${
+                      activeFilter?.type === "status" && activeFilter.value === status
+                        ? status === "ACTIVE" ? "bg-emerald-500/15 text-emerald-600" : "bg-muted text-foreground"
+                        : status === "ACTIVE" ? "text-emerald-600 hover-elevate" : "text-muted-foreground hover-elevate"
+                    }`}
+                    data-testid={`filter-status-${status}`}
+                  >
+                    {status} ({count})
+                  </button>
+                ))}
+              </div>
+            )}
+
             {activeFilter && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>
@@ -849,6 +876,7 @@ function UrlAuditDialog({ account }: { account: AdAccount }) {
                   {activeFilter.type === "domain" && ` in ${activeFilter.value}`}
                   {activeFilter.type === "invalid" && " with invalid URLs"}
                   {activeFilter.type === "missingUtm" && " missing UTM parameters"}
+                  {activeFilter.type === "status" && ` with status ${activeFilter.value}`}
                 </span>
                 <button onClick={() => setActiveFilter(null)} className="text-primary hover:underline cursor-pointer" data-testid="button-clear-url-filter">
                   Clear filter
