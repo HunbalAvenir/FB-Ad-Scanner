@@ -407,24 +407,62 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
   const [name, setName] = useState("");
   const [accessMode, setAccessMode] = useState("unknown");
-  const [bmOurs, setBmOurs] = useState("");
-  const [bmClient, setBmClient] = useState("");
   const [notes, setNotes] = useState("");
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
+  const [accountSearch, setAccountSearch] = useState("");
+
+  const { data: authStatus } = useQuery<{ authenticated: boolean; name: string | null }>({
+    queryKey: ["/api/auth/facebook/status"],
+  });
+
+  const { data: metaAccounts, isLoading: loadingAccounts } = useQuery<MetaAccount[]>({
+    queryKey: ["/api/meta/user-ad-accounts"],
+    enabled: !!authStatus?.authenticated,
+  });
+
+  const { data: systemAccounts, isLoading: loadingSystemAccounts } = useQuery<MetaAccount[]>({
+    queryKey: ["/api/meta/ad-accounts"],
+    enabled: !authStatus?.authenticated,
+  });
+
+  const availableAccounts = authStatus?.authenticated ? metaAccounts : systemAccounts;
+  const isLoadingAccounts = authStatus?.authenticated ? loadingAccounts : loadingSystemAccounts;
+
+  const filteredAccounts = useMemo(() => {
+    if (!availableAccounts) return [];
+    const q = accountSearch.toLowerCase();
+    return availableAccounts.filter(a =>
+      !q || a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q) || (a.business_name || "").toLowerCase().includes(q)
+    );
+  }, [availableAccounts, accountSearch]);
+
+  const toggleAccount = (id: string) => {
+    setSelectedAccounts(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const mutation = useMutation({
     mutationFn: async () => {
+      const adAccountSelections = Array.from(selectedAccounts).map(id => {
+        const acct = availableAccounts?.find(a => a.id === id);
+        return { accountId: id, accountName: acct?.name || id };
+      });
       await apiRequest("POST", "/api/clients", {
         name,
         accessMode,
-        businessManagerIdOurs: bmOurs || null,
-        businessManagerIdClient: bmClient || null,
         notes: notes || null,
         status: "onboarding",
+        adAccountSelections,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ad-accounts"] });
       toast({ title: "Client added", description: `${name} has been added successfully.` });
       onSuccess();
     },
@@ -454,16 +492,76 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-2">
-          <Label htmlFor="bm-ours">Our BM ID</Label>
-          <Input id="bm-ours" value={bmOurs} onChange={e => setBmOurs(e.target.value)} placeholder="BM-..." data-testid="input-bm-ours" />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="bm-client">Client BM ID</Label>
-          <Input id="bm-client" value={bmClient} onChange={e => setBmClient(e.target.value)} placeholder="BM-..." data-testid="input-bm-client" />
-        </div>
+
+      <div className="space-y-2">
+        <Label>Ad Accounts</Label>
+        {isLoadingAccounts ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-3">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading accounts from Meta...
+          </div>
+        ) : availableAccounts && availableAccounts.length > 0 ? (
+          <div className="space-y-2">
+            {availableAccounts.length > 5 && (
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={accountSearch}
+                  onChange={e => setAccountSearch(e.target.value)}
+                  placeholder="Search accounts..."
+                  className="pl-9"
+                  data-testid="input-account-search"
+                />
+              </div>
+            )}
+            <div className="border rounded-md max-h-48 overflow-y-auto">
+              {filteredAccounts.length === 0 ? (
+                <p className="text-sm text-muted-foreground p-3 text-center">No accounts match your search</p>
+              ) : (
+                filteredAccounts.map(acct => {
+                  const isSelected = selectedAccounts.has(acct.id);
+                  return (
+                    <label
+                      key={acct.id}
+                      className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-accent/50 border-b last:border-b-0 transition-colors ${
+                        acct.alreadyImported ? "opacity-50" : ""
+                      } ${isSelected ? "bg-accent/30" : ""}`}
+                      data-testid={`account-option-${acct.id}`}
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleAccount(acct.id)}
+                        disabled={acct.alreadyImported}
+                        data-testid={`checkbox-account-${acct.id}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">{acct.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {acct.id}
+                          {acct.business_name ? ` · ${acct.business_name}` : ""}
+                          {acct.alreadyImported ? " · Already imported" : ""}
+                        </p>
+                      </div>
+                      {acct.account_status === 1 && (
+                        <span className="text-xs text-emerald-600 dark:text-emerald-400 shrink-0">Active</span>
+                      )}
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            {selectedAccounts.size > 0 && (
+              <p className="text-xs text-muted-foreground">{selectedAccounts.size} account{selectedAccounts.size !== 1 ? "s" : ""} selected</p>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground py-2">
+            {!authStatus?.authenticated
+              ? "Use Import Accounts to connect your Facebook and load ad accounts, or add accounts manually after creating the client."
+              : "No ad accounts found in your Meta account."}
+          </p>
+        )}
       </div>
+
       <div className="space-y-2">
         <Label htmlFor="notes">Notes</Label>
         <Textarea id="notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Primary contact, special instructions..." data-testid="input-client-notes" />

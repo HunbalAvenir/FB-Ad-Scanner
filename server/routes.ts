@@ -103,9 +103,24 @@ export async function registerRoutes(
   });
 
   app.post("/api/clients", async (req, res) => {
-    const parsed = insertClientSchema.safeParse(req.body);
+    const { adAccountSelections, ...clientData } = req.body;
+    const parsed = insertClientSchema.safeParse(clientData);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
     const client = await storage.createClient(parsed.data);
+
+    if (Array.isArray(adAccountSelections) && adAccountSelections.length > 0) {
+      for (const sel of adAccountSelections) {
+        if (sel.accountId && sel.accountName) {
+          const actId = sel.accountId.startsWith("act_") ? sel.accountId : `act_${sel.accountId}`;
+          await storage.createAdAccount({
+            clientId: client.id,
+            accountId: actId,
+            accountName: sel.accountName,
+          });
+        }
+      }
+    }
+
     res.status(201).json(client);
   });
 
