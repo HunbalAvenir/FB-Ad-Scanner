@@ -103,10 +103,18 @@ export async function registerRoutes(
   });
 
   app.post("/api/clients", async (req, res) => {
-    const { adAccountSelections, ...clientData } = req.body;
+    const { adAccountSelections, reassignAccountIds, ...clientData } = req.body;
     const parsed = insertClientSchema.safeParse(clientData);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
     const client = await storage.createClient(parsed.data);
+
+    if (Array.isArray(reassignAccountIds) && reassignAccountIds.length > 0) {
+      for (const accountDbId of reassignAccountIds) {
+        if (typeof accountDbId === "number") {
+          await storage.updateAdAccount(accountDbId, { clientId: client.id });
+        }
+      }
+    }
 
     if (Array.isArray(adAccountSelections) && adAccountSelections.length > 0) {
       for (const sel of adAccountSelections) {
