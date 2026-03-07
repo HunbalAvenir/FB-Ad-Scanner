@@ -29,7 +29,7 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 ## Key Pages
 - `/` - Dashboard with stats (blockers/high/medium counts), degraded accounts, recent issues, client overview
 - `/clients` - Client list with add client dialog + "Import Accounts" bulk import (Facebook OAuth login, lists all ad accounts from user's Business Manager, select/deselect, optional client name override, creates clients + ad accounts)
-- `/clients/:id` - Client detail with tabs: Accounts (per-account scan + URL audit buttons), Credentials, Issues (with Ads Manager links, preview links, recommendedFix), Onboarding
+- `/clients/:id` - Client detail with tabs: Accounts, URLs, Scan, Credentials, Issues, Onboarding. Filter state (search, severity, type, rule, route, account, ad status) is unified at parent level via `SharedFilterBar` component shared across URLs/Scan/Issues tabs.
 - `/ad-accounts` - All ad accounts with coverage visualization
 - `/issues` - Issue tracker with Open/In Progress/Closed tabs, severity badges, rule IDs, evidence, Ads Manager deep links, filters (severity/type/rule/client/objective), bulk actions ("Resolve All"/"Dismiss All" for same rule), reopen resolved issues
 - `/credentials` - All credentials with scope and expiry info

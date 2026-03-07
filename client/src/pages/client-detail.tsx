@@ -57,15 +57,23 @@ export default function ClientDetailPage() {
   const [filterRule, setFilterRule] = useState("all");
   const [filterObjective, setFilterObjective] = useState("all");
   const [filterAccount, setFilterAccount] = useState("all");
-  const [urlAccountId, setUrlAccountId] = useState<number | null>(null);
-  const selectedUrlAccount = accounts?.find(a => a.id === urlAccountId) || accounts?.[0] || null;
+  const [filterRoute, setFilterRoute] = useState("all");
+  const [filterSearch, setFilterSearch] = useState("");
+  const [filterAdStatus, setFilterAdStatus] = useState("all");
 
   const issueFilterOptions = useMemo(() => {
     const severities = [...new Set(clientIssues.map(i => i.severity))];
     const types = [...new Set(clientIssues.map(i => i.issueType))];
     const rules = [...new Set(clientIssues.map(i => i.ruleId).filter(Boolean))] as string[];
     const objectives = [...new Set(clientIssues.map(i => (i as any).campaignObjective).filter(Boolean))] as string[];
-    return { severities, types, rules, objectives };
+    const routes = [...new Set(clientIssues.map(i => i.routeTo))];
+    return { severities, types, rules, objectives, routes };
+  }, [clientIssues]);
+
+  const severityCounts = useMemo(() => {
+    const counts = { blocker: 0, high: 0, medium: 0, low: 0 };
+    clientIssues.forEach(i => { if (i.severity in counts) counts[i.severity as keyof typeof counts]++; });
+    return counts;
   }, [clientIssues]);
 
   const applyIssueFilters = (list: ScanIssue[]) => {
@@ -75,12 +83,21 @@ export default function ClientDetailPage() {
       if (filterRule !== "all" && i.ruleId !== filterRule) return false;
       if (filterObjective !== "all" && (i as any).campaignObjective !== filterObjective) return false;
       if (filterAccount !== "all" && i.adAccountId !== Number(filterAccount)) return false;
+      if (filterRoute !== "all" && i.routeTo !== filterRoute) return false;
+      if (filterSearch) {
+        const q = filterSearch.toLowerCase();
+        const matches = i.message.toLowerCase().includes(q) || (i.description || "").toLowerCase().includes(q) || (i.ruleId || "").toLowerCase().includes(q);
+        if (!matches) return false;
+      }
       return true;
     });
   };
 
-  const hasActiveIssueFilters = filterSeverity !== "all" || filterType !== "all" || filterRule !== "all" || filterObjective !== "all" || filterAccount !== "all";
-  const clearIssueFilters = () => { setFilterSeverity("all"); setFilterType("all"); setFilterRule("all"); setFilterObjective("all"); setFilterAccount("all"); };
+  const hasActiveIssueFilters = filterSeverity !== "all" || filterType !== "all" || filterRule !== "all" || filterObjective !== "all" || filterAccount !== "all" || filterRoute !== "all" || filterSearch !== "";
+  const hasActiveUrlFilters = filterSearch !== "" || filterAdStatus !== "all" || filterAccount !== "all";
+  const clearAllFilters = () => { setFilterSeverity("all"); setFilterType("all"); setFilterRule("all"); setFilterObjective("all"); setFilterAccount("all"); setFilterRoute("all"); setFilterSearch(""); setFilterAdStatus("all"); };
+
+  const routeLabels: Record<string, string> = { ops: "Ops", account_manager: "AM", buyer: "Buyer", client: "Client" };
 
   const openIssues = clientIssues.filter(i => i.status === "open");
   const acknowledgedIssues = clientIssues.filter(i => i.status === "acknowledged");
@@ -214,25 +231,43 @@ export default function ClientDetailPage() {
             </Card>
           ) : (
             <div className="space-y-4">
-              {accounts.length > 1 && (
-                <Select value={String(selectedUrlAccount?.id || "")} onValueChange={v => setUrlAccountId(Number(v))}>
-                  <SelectTrigger className="w-72" data-testid="select-url-account">
-                    <SelectValue placeholder="Select account" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {accounts.map(a => (
-                      <SelectItem key={a.id} value={String(a.id)}>{a.accountName}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              {selectedUrlAccount && <UrlAuditInline account={selectedUrlAccount} />}
+              <SharedFilterBar
+                accounts={accounts}
+                filterSearch={filterSearch} setFilterSearch={setFilterSearch}
+                filterAdStatus={filterAdStatus} setFilterAdStatus={setFilterAdStatus}
+                filterAccount={filterAccount} setFilterAccount={setFilterAccount}
+                hasActiveFilters={hasActiveUrlFilters} clearAllFilters={clearAllFilters}
+                mode="urls"
+              />
+              {(filterAccount === "all" ? accounts : accounts.filter(a => String(a.id) === filterAccount)).map(acct => (
+                <div key={acct.id} className="space-y-2">
+                  {(filterAccount === "all" && accounts.length > 1) && (
+                    <p className="text-sm font-medium">{acct.accountName}</p>
+                  )}
+                  <UrlAuditInline account={acct} searchQuery={filterSearch} statusFilter={filterAdStatus} />
+                </div>
+              ))}
             </div>
           )}
         </TabsContent>
 
         <TabsContent value="scan" className="mt-4 space-y-4">
-          <ScanTab accounts={accounts || []} clientId={clientId} issues={clientIssues} />
+          <ScanTab
+            accounts={accounts || []}
+            clientId={clientId}
+            issues={clientIssues}
+            filterSeverity={filterSeverity} setFilterSeverity={setFilterSeverity}
+            filterType={filterType} setFilterType={setFilterType}
+            filterRule={filterRule} setFilterRule={setFilterRule}
+            filterAccount={filterAccount} setFilterAccount={setFilterAccount}
+            filterRoute={filterRoute} setFilterRoute={setFilterRoute}
+            filterSearch={filterSearch} setFilterSearch={setFilterSearch}
+            filterAdStatus={filterAdStatus} setFilterAdStatus={setFilterAdStatus}
+            hasActiveFilters={hasActiveIssueFilters} clearAllFilters={clearAllFilters}
+            severityCounts={severityCounts}
+            issueFilterOptions={issueFilterOptions}
+            routeLabels={routeLabels}
+          />
         </TabsContent>
 
         <TabsContent value="credentials" className="mt-4 space-y-4">
@@ -293,96 +328,22 @@ export default function ClientDetailPage() {
             </Card>
           ) : (
             <>
-              {openIssues.length > 0 && (
-                <div className="flex items-center gap-4 text-sm">
-                  {openIssues.filter(i => i.severity === "blocker").length > 0 && (
-                    <button onClick={() => setFilterSeverity("blocker")} className="flex items-center gap-1.5 hover:opacity-80 cursor-pointer" data-testid="filter-issue-blocker">
-                      <AlertOctagon className="h-4 w-4 text-destructive" />
-                      <span className="font-medium text-destructive">{openIssues.filter(i => i.severity === "blocker").length} Blocker{openIssues.filter(i => i.severity === "blocker").length !== 1 ? "s" : ""}</span>
-                    </button>
-                  )}
-                  {openIssues.filter(i => i.severity === "high").length > 0 && (
-                    <button onClick={() => setFilterSeverity("high")} className="flex items-center gap-1.5 hover:opacity-80 cursor-pointer" data-testid="filter-issue-high">
-                      <AlertTriangle className="h-4 w-4 text-destructive" />
-                      <span className="font-medium">{openIssues.filter(i => i.severity === "high").length} High</span>
-                    </button>
-                  )}
-                  {openIssues.filter(i => i.severity === "medium").length > 0 && (
-                    <button onClick={() => setFilterSeverity("medium")} className="flex items-center gap-1.5 hover:opacity-80 cursor-pointer" data-testid="filter-issue-medium">
-                      <AlertTriangle className="h-4 w-4 text-yellow-500" />
-                      <span className="font-medium">{openIssues.filter(i => i.severity === "medium").length} Medium</span>
-                    </button>
-                  )}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <Filter className="h-4 w-4 text-muted-foreground" />
-                <Select value={filterSeverity} onValueChange={setFilterSeverity}>
-                  <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="filter-issue-severity">
-                    <SelectValue placeholder="Severity" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Severities</SelectItem>
-                    {issueFilterOptions.severities.map(s => (
-                      <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select value={filterType} onValueChange={setFilterType}>
-                  <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="filter-issue-type">
-                    <SelectValue placeholder="Type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Types</SelectItem>
-                    {issueFilterOptions.types.map(t => (
-                      <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select value={filterRule} onValueChange={setFilterRule}>
-                  <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="filter-issue-rule">
-                    <SelectValue placeholder="Rule" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Rules</SelectItem>
-                    {issueFilterOptions.rules.map(r => (
-                      <SelectItem key={r} value={r}>{ruleLabel(r)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {issueFilterOptions.objectives.length > 0 && (
-                  <Select value={filterObjective} onValueChange={setFilterObjective}>
-                    <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="filter-issue-objective">
-                      <SelectValue placeholder="Objective" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Objectives</SelectItem>
-                      {issueFilterOptions.objectives.map(o => (
-                        <SelectItem key={o} value={o}>{objectiveLabel(o)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {accounts && accounts.length > 1 && (
-                  <Select value={filterAccount} onValueChange={setFilterAccount}>
-                    <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="filter-issue-account">
-                      <SelectValue placeholder="Account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Accounts</SelectItem>
-                      {accounts.map(a => (
-                        <SelectItem key={a.id} value={String(a.id)}>{a.accountName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {hasActiveIssueFilters && (
-                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={clearIssueFilters} data-testid="button-clear-issue-filters">
-                    <X className="h-3 w-3 mr-1" /> Clear
-                  </Button>
-                )}
-              </div>
+              <SharedFilterBar
+                accounts={accounts || []}
+                filterSearch={filterSearch} setFilterSearch={setFilterSearch}
+                filterAdStatus={filterAdStatus} setFilterAdStatus={setFilterAdStatus}
+                filterAccount={filterAccount} setFilterAccount={setFilterAccount}
+                filterSeverity={filterSeverity} setFilterSeverity={setFilterSeverity}
+                filterType={filterType} setFilterType={setFilterType}
+                filterRule={filterRule} setFilterRule={setFilterRule}
+                filterRoute={filterRoute} setFilterRoute={setFilterRoute}
+                filterObjective={filterObjective} setFilterObjective={setFilterObjective}
+                hasActiveFilters={hasActiveIssueFilters} clearAllFilters={clearAllFilters}
+                severityCounts={severityCounts}
+                issueFilterOptions={issueFilterOptions}
+                routeLabels={routeLabels}
+                mode="issues"
+              />
 
               <Tabs value={issueTab} onValueChange={setIssueTab}>
                 <TabsList>
@@ -488,6 +449,198 @@ function adsManagerUrl(accountId: string, type: "ad" | "adset" | "campaign", ent
   if (type === "ad") return `https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entityId}`;
   if (type === "adset") return `https://www.facebook.com/adsmanager/manage/adsets?act=${actNum}&selected_adset_ids=${entityId}`;
   return `https://www.facebook.com/adsmanager/manage/campaigns?act=${actNum}&selected_campaign_ids=${entityId}`;
+}
+
+interface SharedFilterBarProps {
+  accounts: AdAccount[];
+  filterSearch: string; setFilterSearch: (v: string) => void;
+  filterAdStatus: string; setFilterAdStatus: (v: string) => void;
+  filterAccount: string; setFilterAccount: (v: string) => void;
+  filterSeverity?: string; setFilterSeverity?: (v: string) => void;
+  filterType?: string; setFilterType?: (v: string) => void;
+  filterRule?: string; setFilterRule?: (v: string) => void;
+  filterRoute?: string; setFilterRoute?: (v: string) => void;
+  filterObjective?: string; setFilterObjective?: (v: string) => void;
+  hasActiveFilters: boolean; clearAllFilters: () => void;
+  severityCounts?: Record<string, number>;
+  issueFilterOptions?: { severities: string[]; types: string[]; rules: string[]; objectives: string[]; routes: string[] };
+  routeLabels?: Record<string, string>;
+  mode: "urls" | "scan" | "issues";
+}
+
+function SharedFilterBar(props: SharedFilterBarProps) {
+  const {
+    accounts, filterSearch, setFilterSearch, filterAdStatus, setFilterAdStatus,
+    filterAccount, setFilterAccount, filterSeverity, setFilterSeverity,
+    filterType, setFilterType, filterRule, setFilterRule,
+    filterRoute, setFilterRoute, filterObjective, setFilterObjective,
+    hasActiveFilters, clearAllFilters,
+    severityCounts, issueFilterOptions, routeLabels, mode,
+  } = props;
+
+  const showIssueFilters = mode === "scan" || mode === "issues";
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder={mode === "urls" ? "Search URLs, ad names..." : "Search issues..."}
+            value={filterSearch}
+            onChange={e => setFilterSearch(e.target.value)}
+            className="pl-8 h-8 text-xs"
+            data-testid="input-shared-search"
+          />
+        </div>
+
+        {accounts.length > 1 && (
+          <Select value={filterAccount} onValueChange={setFilterAccount}>
+            <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="select-shared-account">
+              <SelectValue placeholder="Account" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Accounts</SelectItem>
+              {accounts.map(a => (
+                <SelectItem key={a.id} value={String(a.id)}>{a.accountName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {mode === "urls" && (
+          <Select value={filterAdStatus} onValueChange={setFilterAdStatus}>
+            <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-shared-ad-status">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              <SelectItem value="ACTIVE">Active</SelectItem>
+              <SelectItem value="PAUSED">Paused</SelectItem>
+              <SelectItem value="DELETED">Deleted</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+
+        {showIssueFilters && setFilterSeverity && (
+          <Select value={filterSeverity || "all"} onValueChange={setFilterSeverity}>
+            <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-shared-severity">
+              <SelectValue placeholder="Severity" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Severities</SelectItem>
+              {issueFilterOptions?.severities.map(s => (
+                <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {showIssueFilters && setFilterType && issueFilterOptions && issueFilterOptions.types.length > 1 && (
+          <Select value={filterType || "all"} onValueChange={setFilterType}>
+            <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="select-shared-type">
+              <SelectValue placeholder="Type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              {issueFilterOptions.types.map(t => (
+                <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {showIssueFilters && setFilterRule && issueFilterOptions && issueFilterOptions.rules.length > 1 && (
+          <Select value={filterRule || "all"} onValueChange={setFilterRule}>
+            <SelectTrigger className="w-[180px] h-8 text-xs" data-testid="select-shared-rule">
+              <SelectValue placeholder="Rule" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Rules</SelectItem>
+              {issueFilterOptions.rules.map(r => (
+                <SelectItem key={r} value={r}>{ruleLabel(r)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {showIssueFilters && setFilterRoute && issueFilterOptions && issueFilterOptions.routes.length > 1 && (
+          <Select value={filterRoute || "all"} onValueChange={setFilterRoute}>
+            <SelectTrigger className="w-[120px] h-8 text-xs" data-testid="select-shared-route">
+              <SelectValue placeholder="Route To" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Teams</SelectItem>
+              {issueFilterOptions.routes.map(r => (
+                <SelectItem key={r} value={r}>{(routeLabels || {})[r] || r}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {showIssueFilters && setFilterObjective && issueFilterOptions && issueFilterOptions.objectives.length > 0 && (
+          <Select value={filterObjective || "all"} onValueChange={setFilterObjective}>
+            <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="select-shared-objective">
+              <SelectValue placeholder="Objective" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Objectives</SelectItem>
+              {issueFilterOptions.objectives.map(o => (
+                <SelectItem key={o} value={o}>{objectiveLabel(o)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {hasActiveFilters && (
+          <button onClick={clearAllFilters} className="text-xs text-primary hover:underline cursor-pointer flex items-center gap-1" data-testid="button-clear-filters">
+            <X className="h-3 w-3" /> Clear
+          </button>
+        )}
+      </div>
+
+      {showIssueFilters && severityCounts && setFilterSeverity && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(severityCounts.blocker || 0) > 0 && (
+            <button
+              onClick={() => setFilterSeverity(filterSeverity === "blocker" ? "all" : "blocker")}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${filterSeverity === "blocker" ? "bg-red-500/15 text-red-600" : "text-red-600 hover:bg-red-500/10"}`}
+              data-testid="pill-severity-blocker"
+            >
+              {severityCounts.blocker} Blocker
+            </button>
+          )}
+          {(severityCounts.high || 0) > 0 && (
+            <button
+              onClick={() => setFilterSeverity(filterSeverity === "high" ? "all" : "high")}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${filterSeverity === "high" ? "bg-orange-500/15 text-orange-600" : "text-orange-600 hover:bg-orange-500/10"}`}
+              data-testid="pill-severity-high"
+            >
+              {severityCounts.high} High
+            </button>
+          )}
+          {(severityCounts.medium || 0) > 0 && (
+            <button
+              onClick={() => setFilterSeverity(filterSeverity === "medium" ? "all" : "medium")}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${filterSeverity === "medium" ? "bg-yellow-500/15 text-yellow-600" : "text-yellow-600 hover:bg-yellow-500/10"}`}
+              data-testid="pill-severity-medium"
+            >
+              {severityCounts.medium} Medium
+            </button>
+          )}
+          {(severityCounts.low || 0) > 0 && (
+            <button
+              onClick={() => setFilterSeverity(filterSeverity === "low" ? "all" : "low")}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${filterSeverity === "low" ? "bg-blue-500/15 text-blue-600" : "text-blue-600 hover:bg-blue-500/10"}`}
+              data-testid="pill-severity-low"
+            >
+              {severityCounts.low} Low
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; metaAccountId?: string; allIssues?: ScanIssue[] }) {
@@ -803,9 +956,8 @@ interface AdUrlEntry {
   urlTags?: string;
 }
 
-function UrlAuditInline({ account }: { account: AdAccount }) {
-  const [activeFilter, setActiveFilter] = useState<{ type: "domain" | "invalid" | "missingUtm" | "status"; value?: string } | null>(null);
-  const [urlSearch, setUrlSearch] = useState("");
+function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { account: AdAccount; searchQuery?: string; statusFilter?: string }) {
+  const [activeFilter, setActiveFilter] = useState<{ type: "domain" | "invalid" | "missingUtm"; value?: string } | null>(null);
   const { data, isLoading } = useQuery<{ urls: AdUrlEntry[]; error?: string }>({
     queryKey: [`/api/ad-accounts/${account.id}/urls`],
   });
@@ -815,33 +967,31 @@ function UrlAuditInline({ account }: { account: AdAccount }) {
   const invalidUrls = urls.filter(u => u.domain === "INVALID_URL");
   const missingUtm = urls.filter(u => !u.hasUtm);
   const actNum = account.accountId.replace("act_", "");
-  const statuses = useMemo(() => {
-    const counts: Record<string, number> = {};
-    urls.forEach(u => { counts[u.effectiveStatus] = (counts[u.effectiveStatus] || 0) + 1; });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [urls]);
 
-  const preFilteredUrls = activeFilter
-    ? activeFilter.type === "domain"
-      ? urls.filter(u => u.domain === activeFilter.value)
-      : activeFilter.type === "invalid"
-        ? invalidUrls
-        : activeFilter.type === "status"
-          ? urls.filter(u => u.effectiveStatus === activeFilter.value)
-          : missingUtm
-    : urls;
+  const preFilteredUrls = useMemo(() => {
+    let list = urls;
+    if (statusFilter !== "all") {
+      list = list.filter(u => u.effectiveStatus === statusFilter);
+    }
+    if (activeFilter) {
+      if (activeFilter.type === "domain") list = list.filter(u => u.domain === activeFilter.value);
+      else if (activeFilter.type === "invalid") list = list.filter(u => u.domain === "INVALID_URL");
+      else if (activeFilter.type === "missingUtm") list = list.filter(u => !u.hasUtm);
+    }
+    return list;
+  }, [urls, statusFilter, activeFilter]);
 
   const filteredUrls = useMemo(() => {
-    if (!urlSearch) return preFilteredUrls;
-    const q = urlSearch.toLowerCase();
+    if (!searchQuery) return preFilteredUrls;
+    const q = searchQuery.toLowerCase();
     return preFilteredUrls.filter(u =>
       u.adName.toLowerCase().includes(q) ||
       u.destinationUrl.toLowerCase().includes(q) ||
       u.domain.toLowerCase().includes(q)
     );
-  }, [preFilteredUrls, urlSearch]);
+  }, [preFilteredUrls, searchQuery]);
 
-  const toggleFilter = (type: "domain" | "invalid" | "missingUtm" | "status", value?: string) => {
+  const toggleFilter = (type: "domain" | "invalid" | "missingUtm", value?: string) => {
     if (activeFilter?.type === type && activeFilter?.value === value) {
       setActiveFilter(null);
     } else {
@@ -897,50 +1047,18 @@ function UrlAuditInline({ account }: { account: AdAccount }) {
         )}
       </div>
 
-      {statuses.length > 1 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-muted-foreground">Status:</span>
-          {statuses.map(([status, count]) => (
-            <button
-              key={status}
-              onClick={() => toggleFilter("status", status)}
-              className={`px-2 py-0.5 rounded-md text-xs cursor-pointer font-medium transition-colors ${
-                activeFilter?.type === "status" && activeFilter.value === status
-                  ? status === "ACTIVE" ? "bg-emerald-500/15 text-emerald-600" : "bg-muted text-foreground"
-                  : status === "ACTIVE" ? "text-emerald-600 hover-elevate" : "text-muted-foreground hover-elevate"
-              }`}
-              data-testid={`filter-status-${status}`}
-            >
-              {status} ({count})
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="relative">
-        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input
-          value={urlSearch}
-          onChange={e => setUrlSearch(e.target.value)}
-          placeholder="Search by ad name, URL, or domain..."
-          className="pl-9"
-          data-testid="input-url-search"
-        />
-      </div>
-
-      {(activeFilter || urlSearch) && (
+      {(activeFilter || searchQuery || statusFilter !== "all") && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>
             Showing {filteredUrls.length} of {urls.length} URLs
             {activeFilter?.type === "domain" && ` in ${activeFilter.value}`}
             {activeFilter?.type === "invalid" && " with invalid URLs"}
             {activeFilter?.type === "missingUtm" && " missing UTM parameters"}
-            {activeFilter?.type === "status" && ` with status ${activeFilter.value}`}
-            {urlSearch && ` matching "${urlSearch}"`}
+            {searchQuery && ` matching "${searchQuery}"`}
           </span>
-          {(activeFilter || urlSearch) && (
-            <button onClick={() => { setActiveFilter(null); setUrlSearch(""); }} className="text-primary hover:underline cursor-pointer" data-testid="button-clear-url-filter">
-              Clear all
+          {activeFilter && (
+            <button onClick={() => setActiveFilter(null)} className="text-primary hover:underline cursor-pointer" data-testid="button-clear-url-local-filter">
+              Clear local filter
             </button>
           )}
         </div>
@@ -1039,15 +1157,34 @@ function UrlAuditInline({ account }: { account: AdAccount }) {
   );
 }
 
-function ScanTab({ accounts, clientId, issues }: { accounts: AdAccount[]; clientId: number; issues: ScanIssue[] }) {
+interface ScanTabProps {
+  accounts: AdAccount[];
+  clientId: number;
+  issues: ScanIssue[];
+  filterSeverity: string; setFilterSeverity: (v: string) => void;
+  filterType: string; setFilterType: (v: string) => void;
+  filterRule: string; setFilterRule: (v: string) => void;
+  filterAccount: string; setFilterAccount: (v: string) => void;
+  filterRoute: string; setFilterRoute: (v: string) => void;
+  filterSearch: string; setFilterSearch: (v: string) => void;
+  filterAdStatus: string; setFilterAdStatus: (v: string) => void;
+  hasActiveFilters: boolean; clearAllFilters: () => void;
+  severityCounts: Record<string, number>;
+  issueFilterOptions: { severities: string[]; types: string[]; rules: string[]; objectives: string[]; routes: string[] };
+  routeLabels: Record<string, string>;
+}
+
+function ScanTab(props: ScanTabProps) {
+  const { accounts, clientId, issues,
+    filterSeverity, setFilterSeverity, filterType, setFilterType,
+    filterRule, setFilterRule, filterAccount, setFilterAccount,
+    filterRoute, setFilterRoute, filterSearch, setFilterSearch,
+    filterAdStatus, setFilterAdStatus,
+    hasActiveFilters, clearAllFilters,
+    severityCounts, issueFilterOptions, routeLabels,
+  } = props;
   const { toast } = useToast();
   const [scanningAccountId, setScanningAccountId] = useState<number | null>(null);
-  const [scanFilterSeverity, setScanFilterSeverity] = useState("all");
-  const [scanFilterType, setScanFilterType] = useState("all");
-  const [scanFilterRule, setScanFilterRule] = useState("all");
-  const [scanFilterStatus, setScanFilterStatus] = useState("all");
-  const [scanFilterAccount, setScanFilterAccount] = useState("all");
-  const [scanFilterRoute, setScanFilterRoute] = useState("all");
 
   const scanMutation = useMutation({
     mutationFn: async (accountId: number) => {
@@ -1100,50 +1237,21 @@ function ScanTab({ accounts, clientId, issues }: { accounts: AdAccount[]; client
     },
   });
 
-  const scanFilterOptions = useMemo(() => {
-    const severities = [...new Set(issues.map(i => i.severity))];
-    const types = [...new Set(issues.map(i => i.issueType))];
-    const rules = [...new Set(issues.map(i => i.ruleId).filter(Boolean))] as string[];
-    const statuses = [...new Set(issues.map(i => i.status))];
-    const routes = [...new Set(issues.map(i => i.routeTo))];
-    return { severities, types, rules, statuses, routes };
-  }, [issues]);
-
   const filteredIssues = useMemo(() => {
     return issues.filter(i => {
-      if (scanFilterSeverity !== "all" && i.severity !== scanFilterSeverity) return false;
-      if (scanFilterType !== "all" && i.issueType !== scanFilterType) return false;
-      if (scanFilterRule !== "all" && i.ruleId !== scanFilterRule) return false;
-      if (scanFilterStatus !== "all" && i.status !== scanFilterStatus) return false;
-      if (scanFilterAccount !== "all" && String(i.adAccountId) !== scanFilterAccount) return false;
-      if (scanFilterRoute !== "all" && i.routeTo !== scanFilterRoute) return false;
+      if (filterSeverity !== "all" && i.severity !== filterSeverity) return false;
+      if (filterType !== "all" && i.issueType !== filterType) return false;
+      if (filterRule !== "all" && i.ruleId !== filterRule) return false;
+      if (filterAccount !== "all" && String(i.adAccountId) !== filterAccount) return false;
+      if (filterRoute !== "all" && i.routeTo !== filterRoute) return false;
+      if (filterSearch) {
+        const q = filterSearch.toLowerCase();
+        const matches = i.message.toLowerCase().includes(q) || (i.description || "").toLowerCase().includes(q) || (i.ruleId || "").toLowerCase().includes(q);
+        if (!matches) return false;
+      }
       return true;
     });
-  }, [issues, scanFilterSeverity, scanFilterType, scanFilterRule, scanFilterStatus, scanFilterAccount, scanFilterRoute]);
-
-  const severityCounts = useMemo(() => {
-    const counts = { blocker: 0, high: 0, medium: 0, low: 0 };
-    issues.forEach(i => { if (i.severity in counts) counts[i.severity as keyof typeof counts]++; });
-    return counts;
-  }, [issues]);
-
-  const hasActiveFilters = scanFilterSeverity !== "all" || scanFilterType !== "all" || scanFilterRule !== "all" || scanFilterStatus !== "all" || scanFilterAccount !== "all" || scanFilterRoute !== "all";
-
-  const clearAllFilters = () => {
-    setScanFilterSeverity("all");
-    setScanFilterType("all");
-    setScanFilterRule("all");
-    setScanFilterStatus("all");
-    setScanFilterAccount("all");
-    setScanFilterRoute("all");
-  };
-
-  const routeLabels: Record<string, string> = {
-    ops: "Ops",
-    account_manager: "AM",
-    buyer: "Buyer",
-    client: "Client",
-  };
+  }, [issues, filterSeverity, filterType, filterRule, filterAccount, filterRoute, filterSearch]);
 
   if (accounts.length === 0) {
     return (
@@ -1209,108 +1317,21 @@ function ScanTab({ accounts, clientId, issues }: { accounts: AdAccount[]; client
         </Card>
       ) : (
         <>
-          <div className="flex items-center gap-3 flex-wrap">
-            {severityCounts.blocker > 0 && (
-              <button
-                onClick={() => setScanFilterSeverity(scanFilterSeverity === "blocker" ? "all" : "blocker")}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${scanFilterSeverity === "blocker" ? "bg-red-500/15 text-red-600" : "text-red-600 hover-elevate"}`}
-                data-testid="filter-scan-blocker"
-              >
-                {severityCounts.blocker} Blocker
-              </button>
-            )}
-            {severityCounts.high > 0 && (
-              <button
-                onClick={() => setScanFilterSeverity(scanFilterSeverity === "high" ? "all" : "high")}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${scanFilterSeverity === "high" ? "bg-orange-500/15 text-orange-600" : "text-orange-600 hover-elevate"}`}
-                data-testid="filter-scan-high"
-              >
-                {severityCounts.high} High
-              </button>
-            )}
-            {severityCounts.medium > 0 && (
-              <button
-                onClick={() => setScanFilterSeverity(scanFilterSeverity === "medium" ? "all" : "medium")}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${scanFilterSeverity === "medium" ? "bg-yellow-500/15 text-yellow-600" : "text-yellow-600 hover-elevate"}`}
-                data-testid="filter-scan-medium"
-              >
-                {severityCounts.medium} Medium
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {scanFilterOptions.types.length > 1 && (
-              <Select value={scanFilterType} onValueChange={setScanFilterType}>
-                <SelectTrigger className="w-40 h-8 text-xs" data-testid="select-scan-filter-type">
-                  <SelectValue placeholder="Issue Type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
-                  {scanFilterOptions.types.map(t => (
-                    <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {scanFilterOptions.rules.length > 1 && (
-              <Select value={scanFilterRule} onValueChange={setScanFilterRule}>
-                <SelectTrigger className="w-44 h-8 text-xs" data-testid="select-scan-filter-rule">
-                  <SelectValue placeholder="Rule" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Rules</SelectItem>
-                  {scanFilterOptions.rules.map(r => (
-                    <SelectItem key={r} value={r}>{ruleLabel(r)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {scanFilterOptions.statuses.length > 1 && (
-              <Select value={scanFilterStatus} onValueChange={setScanFilterStatus}>
-                <SelectTrigger className="w-36 h-8 text-xs" data-testid="select-scan-filter-status">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  {scanFilterOptions.statuses.map(s => (
-                    <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {accounts.length > 1 && (
-              <Select value={scanFilterAccount} onValueChange={setScanFilterAccount}>
-                <SelectTrigger className="w-48 h-8 text-xs" data-testid="select-scan-filter-account">
-                  <SelectValue placeholder="Account" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Accounts</SelectItem>
-                  {accounts.map(a => (
-                    <SelectItem key={a.id} value={String(a.id)}>{a.accountName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {scanFilterOptions.routes.length > 1 && (
-              <Select value={scanFilterRoute} onValueChange={setScanFilterRoute}>
-                <SelectTrigger className="w-32 h-8 text-xs" data-testid="select-scan-filter-route">
-                  <SelectValue placeholder="Route To" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Teams</SelectItem>
-                  {scanFilterOptions.routes.map(r => (
-                    <SelectItem key={r} value={r}>{routeLabels[r] || r}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {hasActiveFilters && (
-              <button onClick={clearAllFilters} className="text-xs text-primary hover:underline cursor-pointer flex items-center gap-1" data-testid="button-clear-scan-filters">
-                <X className="h-3 w-3" /> Clear filters
-              </button>
-            )}
-          </div>
+          <SharedFilterBar
+            accounts={accounts}
+            filterSearch={filterSearch} setFilterSearch={setFilterSearch}
+            filterAdStatus={filterAdStatus} setFilterAdStatus={setFilterAdStatus}
+            filterAccount={filterAccount} setFilterAccount={setFilterAccount}
+            filterSeverity={filterSeverity} setFilterSeverity={setFilterSeverity}
+            filterType={filterType} setFilterType={setFilterType}
+            filterRule={filterRule} setFilterRule={setFilterRule}
+            filterRoute={filterRoute} setFilterRoute={setFilterRoute}
+            hasActiveFilters={hasActiveFilters} clearAllFilters={clearAllFilters}
+            severityCounts={severityCounts}
+            issueFilterOptions={issueFilterOptions}
+            routeLabels={routeLabels}
+            mode="scan"
+          />
 
           {hasActiveFilters && (
             <p className="text-xs text-muted-foreground">Showing {filteredIssues.length} of {issues.length} issues</p>
