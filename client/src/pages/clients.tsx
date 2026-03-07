@@ -27,60 +27,69 @@ const ACCOUNT_STATUS_LABELS: Record<number, string> = {
   100: "Pending Risk Review",
 };
 
-function useFacebookLogin(onAuthenticated?: () => void) {
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+declare global {
+  interface Window {
+    FB?: any;
+    fbAsyncInit?: () => void;
+  }
+}
 
-  const cleanup = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
+let fbSdkLoaded = false;
+let fbSdkInitialized = false;
+
+function loadFbSdk(appId: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (fbSdkInitialized) return resolve();
+    if (fbSdkLoaded) {
+      const check = setInterval(() => {
+        if (fbSdkInitialized) { clearInterval(check); resolve(); }
+      }, 100);
+      return;
+    }
+    fbSdkLoaded = true;
+    window.fbAsyncInit = () => {
+      window.FB.init({ appId, cookie: true, xfbml: false, version: "v21.0" });
+      fbSdkInitialized = true;
+      resolve();
+    };
+    const script = document.createElement("script");
+    script.src = "https://connect.facebook.net/en_US/sdk.js";
+    script.async = true;
+    document.body.appendChild(script);
+  });
+}
+
+function useFacebookLogin() {
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  const openLogin = useCallback(async () => {
+    setLoggingIn(true);
+    try {
+      const appIdRes = await fetch("/api/auth/facebook/app-id");
+      const { appId } = await appIdRes.json();
+      await loadFbSdk(appId);
+
+      window.FB.login((response: any) => {
+        (async () => {
+          try {
+            if (response.authResponse?.accessToken) {
+              await apiRequest("POST", "/api/auth/facebook/token", {
+                accessToken: response.authResponse.accessToken,
+              });
+              queryClient.invalidateQueries({ queryKey: ["/api/auth/facebook/status"] });
+              queryClient.invalidateQueries({ queryKey: ["/api/meta/user-ad-accounts"] });
+            }
+          } finally {
+            setLoggingIn(false);
+          }
+        })();
+      }, { scope: "ads_read,business_management" });
+    } catch {
+      setLoggingIn(false);
     }
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
-
-  const openLogin = useCallback(() => {
-    const width = 600;
-    const height = 700;
-    const left = window.screenX + (window.outerWidth - width) / 2;
-    const top = window.screenY + (window.outerHeight - height) / 2;
-    const popup = window.open(
-      "/api/auth/facebook",
-      "facebook-login",
-      `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
-    );
-
-    cleanup();
-    pollRef.current = setInterval(async () => {
-      try {
-        if (popup && popup.closed) {
-          cleanup();
-          const res = await fetch("/api/auth/facebook/status");
-          const data = await res.json();
-          if (data.authenticated) {
-            queryClient.invalidateQueries({ queryKey: ["/api/auth/facebook/status"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/meta/user-ad-accounts"] });
-            onAuthenticated?.();
-          }
-          return;
-        }
-        if (popup) {
-          try {
-            const url = popup.location.href;
-            if (url && url.includes("/clients")) {
-              popup.close();
-              cleanup();
-              queryClient.invalidateQueries({ queryKey: ["/api/auth/facebook/status"] });
-              queryClient.invalidateQueries({ queryKey: ["/api/meta/user-ad-accounts"] });
-              onAuthenticated?.();
-            }
-          } catch (_) {}
-        }
-      } catch (_) {}
-    }, 500);
-  }, [cleanup, onAuthenticated]);
-
-  return openLogin;
+  return { openLogin, loggingIn };
 }
 
 interface MetaAccount {
@@ -201,7 +210,7 @@ function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [clientNameOverrides, setClientNameOverrides] = useState<Record<string, string>>({});
-  const openFbLogin = useFacebookLogin();
+  const { openLogin: openFbLogin, loggingIn: fbLoggingIn } = useFacebookLogin();
 
   const { data: authStatus, isLoading: authLoading } = useQuery<{ authenticated: boolean; name: string | null }>({
     queryKey: ["/api/auth/facebook/status"],
@@ -306,11 +315,12 @@ function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
         </div>
         <Button
           onClick={openFbLogin}
+          disabled={fbLoggingIn}
           className="bg-[#1877F2] hover:bg-[#166FE5] text-white"
           data-testid="button-facebook-login"
         >
-          <LogIn className="h-4 w-4 mr-2" />
-          Log in with Facebook
+          {fbLoggingIn ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <LogIn className="h-4 w-4 mr-2" />}
+          {fbLoggingIn ? "Connecting..." : "Log in with Facebook"}
         </Button>
       </div>
     );
@@ -467,7 +477,7 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
   const [notes, setNotes] = useState("");
   const [selectedMetaIds, setSelectedMetaIds] = useState<Set<string>>(new Set());
   const [accountSearch, setAccountSearch] = useState("");
-  const openFbLogin = useFacebookLogin();
+  const { openLogin: openFbLogin, loggingIn: fbLoggingIn } = useFacebookLogin();
 
   const { data: authStatus } = useQuery<{ authenticated: boolean; name: string | null }>({
     queryKey: ["/api/auth/facebook/status"],
@@ -563,9 +573,11 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
               variant="outline"
               className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white border-none"
               onClick={openFbLogin}
+              disabled={fbLoggingIn}
               data-testid="button-facebook-login"
             >
-              <SiFacebook className="h-4 w-4 mr-2" /> Log in with Facebook
+              {fbLoggingIn ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <SiFacebook className="h-4 w-4 mr-2" />}
+              {fbLoggingIn ? "Connecting..." : "Log in with Facebook"}
             </Button>
           </div>
         ) : (
