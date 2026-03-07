@@ -33,11 +33,13 @@ export async function registerRoutes(
 
   app.get("/api/auth/facebook/callback", async (req, res) => {
     const { code, state } = req.query;
+    const closePopup = (msg: string) => res.send(`<!DOCTYPE html><html><body><p>${msg}</p><script>window.close();</script></body></html>`);
+
     if (!code || !META_APP_ID || !META_APP_SECRET) {
-      return res.redirect("/clients?auth_error=missing_params");
+      return closePopup("Missing parameters. You can close this window.");
     }
     if (!state || state !== req.session.oauthState) {
-      return res.redirect("/clients?auth_error=invalid_state");
+      return closePopup("Invalid state. Please try logging in again.");
     }
     delete req.session.oauthState;
     const redirectUri = `${getBaseUrl(req)}/api/auth/facebook/callback`;
@@ -46,15 +48,15 @@ export async function registerRoutes(
       const tokenRes = await fetch(tokenUrl);
       const tokenData = await tokenRes.json() as any;
       if (tokenData.error) {
-        return res.redirect(`/clients?auth_error=${encodeURIComponent(tokenData.error.message)}`);
+        return closePopup(`Login failed: ${tokenData.error.message}. You can close this window.`);
       }
       const userRes = await fetch(`https://graph.facebook.com/v21.0/me?access_token=${tokenData.access_token}&fields=name`);
       const userData = await userRes.json() as any;
       req.session.metaUserToken = tokenData.access_token;
       req.session.metaUserName = userData.name || "Unknown";
-      res.redirect("/clients?auth=success");
+      closePopup("Login successful! This window will close automatically.");
     } catch (err: any) {
-      res.redirect(`/clients?auth_error=${encodeURIComponent(err.message)}`);
+      closePopup(`Error: ${err.message}. You can close this window.`);
     }
   });
 

@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Link } from "wouter";
 import { Plus, Users, ArrowRight, Download, Loader2, Search, CheckCircle2, LogIn, LogOut } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { SiFacebook } from "react-icons/si";
@@ -26,6 +26,62 @@ const ACCOUNT_STATUS_LABELS: Record<number, string> = {
   9: "In Grace Period",
   100: "Pending Risk Review",
 };
+
+function useFacebookLogin(onAuthenticated?: () => void) {
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const cleanup = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => cleanup, [cleanup]);
+
+  const openLogin = useCallback(() => {
+    const width = 600;
+    const height = 700;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    const popup = window.open(
+      "/api/auth/facebook",
+      "facebook-login",
+      `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
+    );
+
+    cleanup();
+    pollRef.current = setInterval(async () => {
+      try {
+        if (popup && popup.closed) {
+          cleanup();
+          const res = await fetch("/api/auth/facebook/status");
+          const data = await res.json();
+          if (data.authenticated) {
+            queryClient.invalidateQueries({ queryKey: ["/api/auth/facebook/status"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/meta/user-ad-accounts"] });
+            onAuthenticated?.();
+          }
+          return;
+        }
+        if (popup) {
+          try {
+            const url = popup.location.href;
+            if (url && url.includes("/clients")) {
+              popup.close();
+              cleanup();
+              queryClient.invalidateQueries({ queryKey: ["/api/auth/facebook/status"] });
+              queryClient.invalidateQueries({ queryKey: ["/api/meta/user-ad-accounts"] });
+              onAuthenticated?.();
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }, 500);
+  }, [cleanup, onAuthenticated]);
+
+  return openLogin;
+}
 
 interface MetaAccount {
   id: string;
@@ -145,6 +201,7 @@ function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [clientNameOverrides, setClientNameOverrides] = useState<Record<string, string>>({});
+  const openFbLogin = useFacebookLogin();
 
   const { data: authStatus, isLoading: authLoading } = useQuery<{ authenticated: boolean; name: string | null }>({
     queryKey: ["/api/auth/facebook/status"],
@@ -248,7 +305,7 @@ function BulkImportForm({ onSuccess }: { onSuccess: () => void }) {
           </p>
         </div>
         <Button
-          onClick={() => { window.location.href = "/api/auth/facebook"; }}
+          onClick={openFbLogin}
           className="bg-[#1877F2] hover:bg-[#166FE5] text-white"
           data-testid="button-facebook-login"
         >
@@ -410,6 +467,7 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
   const [notes, setNotes] = useState("");
   const [selectedMetaIds, setSelectedMetaIds] = useState<Set<string>>(new Set());
   const [accountSearch, setAccountSearch] = useState("");
+  const openFbLogin = useFacebookLogin();
 
   const { data: authStatus } = useQuery<{ authenticated: boolean; name: string | null }>({
     queryKey: ["/api/auth/facebook/status"],
@@ -504,7 +562,7 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
             <Button
               variant="outline"
               className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white border-none"
-              onClick={() => { window.location.href = "/api/auth/facebook"; }}
+              onClick={openFbLogin}
               data-testid="button-facebook-login"
             >
               <SiFacebook className="h-4 w-4 mr-2" /> Log in with Facebook
