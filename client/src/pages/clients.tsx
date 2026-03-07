@@ -477,6 +477,8 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
   const [notes, setNotes] = useState("");
   const [selectedMetaIds, setSelectedMetaIds] = useState<Set<string>>(new Set());
   const [accountSearch, setAccountSearch] = useState("");
+  const [manualAccountId, setManualAccountId] = useState("");
+  const [manualAccountName, setManualAccountName] = useState("");
   const { openLogin: openFbLogin, loggingIn: fbLoggingIn } = useFacebookLogin();
 
   const { data: authStatus } = useQuery<{ authenticated: boolean; name: string | null }>({
@@ -514,6 +516,12 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
         const acct = metaAccounts?.find(a => a.id === id);
         return { accountId: id, accountName: acct?.name || id };
       });
+      if (manualAccountId.trim()) {
+        adAccountSelections.push({
+          accountId: manualAccountId.trim(),
+          accountName: manualAccountName.trim() || manualAccountId.trim(),
+        });
+      }
       await apiRequest("POST", "/api/clients", {
         name,
         accessMode,
@@ -660,6 +668,24 @@ function AddClientForm({ onSuccess }: { onSuccess: () => void }) {
             )}
           </div>
         )}
+
+        <div className="border-t pt-3 mt-3">
+          <p className="text-xs font-medium mb-2">Or add an account ID manually</p>
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              value={manualAccountId}
+              onChange={e => setManualAccountId(e.target.value)}
+              placeholder="act_123456789"
+              data-testid="input-manual-account-id"
+            />
+            <Input
+              value={manualAccountName}
+              onChange={e => setManualAccountName(e.target.value)}
+              placeholder="Account name"
+              data-testid="input-manual-account-name"
+            />
+          </div>
+        </div>
       </div>
 
       <div className="space-y-2">
