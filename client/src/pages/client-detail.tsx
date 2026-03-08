@@ -51,6 +51,7 @@ export default function ClientDetailPage() {
   const clientIssues = issues?.filter(i => i.clientId === clientId) || [];
   const isLoading = clientLoading || accountsLoading || credsLoading;
 
+  const [activeTab, setActiveTab] = useState("accounts");
   const [issueTab, setIssueTab] = useState("open");
   const [filterSeverity, setFilterSeverity] = useState("all");
   const [filterType, setFilterType] = useState("all");
@@ -98,6 +99,13 @@ export default function ClientDetailPage() {
   const hasActiveIssueFilters = filterSeverity !== "all" || filterType !== "all" || filterRule !== "all" || filterObjective !== "all" || filterAccount !== "all" || filterRoute !== "all" || filterSearch !== "" || filterAdStatus !== "all";
   const hasActiveUrlFilters = filterSearch !== "" || filterAdStatus !== "all" || filterAccount !== "all";
   const clearAllFilters = () => { setFilterSeverity("all"); setFilterType("all"); setFilterRule("all"); setFilterObjective("all"); setFilterAccount("all"); setFilterRoute("all"); setFilterSearch(""); setFilterAdStatus("all"); };
+
+  const navigateToIssuesForRule = (ruleId: string) => {
+    clearAllFilters();
+    setFilterRule(ruleId);
+    setIssueTab("open");
+    setActiveTab("issues");
+  };
 
   const routeLabels: Record<string, string> = { ops: "Ops", account_manager: "AM", buyer: "Buyer", client: "Client" };
 
@@ -181,7 +189,7 @@ export default function ClientDetailPage() {
         </Card>
       )}
 
-      <Tabs defaultValue="accounts">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="accounts" data-testid="tab-accounts">
             <Radio className="h-3.5 w-3.5 mr-1" /> Accounts ({accounts?.length || 0})
@@ -269,6 +277,7 @@ export default function ClientDetailPage() {
             severityCounts={severityCounts}
             issueFilterOptions={issueFilterOptions}
             routeLabels={routeLabels}
+            navigateToIssuesForRule={navigateToIssuesForRule}
           />
         </TabsContent>
 
@@ -638,7 +647,7 @@ function SharedFilterBar(props: SharedFilterBarProps) {
   );
 }
 
-function GroupedIssueList({ issues, accounts, allIssues }: { issues: ScanIssue[]; accounts?: AdAccount[]; allIssues: ScanIssue[] }) {
+function GroupedIssueList({ issues, accounts, allIssues, onOpenIssues }: { issues: ScanIssue[]; accounts?: AdAccount[]; allIssues: ScanIssue[]; onOpenIssues?: (ruleId: string) => void }) {
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
 
   const groups = useMemo(() => {
@@ -710,6 +719,17 @@ function GroupedIssueList({ issues, accounts, allIssues }: { issues: ScanIssue[]
                 )}
               </div>
             </button>
+            {onOpenIssues && (
+              <div className="px-4 pb-2 -mt-1">
+                <button
+                  onClick={() => onOpenIssues(ruleKey)}
+                  className="text-xs text-primary hover:underline cursor-pointer"
+                  data-testid={`link-open-issues-${ruleKey}`}
+                >
+                  Open in Issues tab to resolve
+                </button>
+              </div>
+            )}
             {expanded && (
               <div className="border-t border-card-border px-4 pb-4 pt-2 space-y-3">
                 {ruleIssues.map(issue => {
@@ -1157,95 +1177,137 @@ function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { a
         </div>
       )}
 
-      {domains.length >= 1 && (
-        <div className="p-3 rounded-md bg-muted">
-          <p className="text-xs font-medium mb-1">Domains in use:</p>
-          <div className="flex flex-wrap gap-2">
-            {domains.map(d => (
-              <button
-                key={d}
-                onClick={() => toggleFilter("domain", d)}
-                className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer transition-colors ${
-                  activeFilter?.type === "domain" && activeFilter.value === d
-                    ? d === "INVALID_URL"
-                      ? "border-destructive text-destructive bg-destructive/10"
-                      : "border-primary text-primary bg-primary/10"
-                    : d === "INVALID_URL"
-                      ? "border-destructive text-destructive hover-elevate"
-                      : "border-border hover-elevate"
-                }`}
-                data-testid={`filter-domain-${d}`}
-              >
-                <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d} ({statusFilteredUrls.filter(u => u.domain === d).length})
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <DomainGroupedUrlList urls={filteredUrls} actNum={actNum} />
+    </div>
+  );
+}
 
-      <div className="space-y-2">
-        {filteredUrls.map((entry, idx) => (
-          <div key={idx} className="p-3 rounded-md border text-xs space-y-1" data-testid={`card-url-${idx}`}>
-            <div className="flex items-start justify-between gap-2">
+function DomainGroupedUrlList({ urls, actNum }: { urls: any[]; actNum: string }) {
+  const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set());
+
+  const domainGroups = useMemo(() => {
+    const map = new Map<string, any[]>();
+    for (const u of urls) {
+      const d = u.domain || "UNKNOWN";
+      if (!map.has(d)) map.set(d, []);
+      map.get(d)!.push(u);
+    }
+    return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+  }, [urls]);
+
+  const toggleDomain = (domain: string) => {
+    setExpandedDomains(prev => {
+      const next = new Set(prev);
+      if (next.has(domain)) next.delete(domain); else next.add(domain);
+      return next;
+    });
+  };
+
+  if (domainGroups.length === 0) {
+    return <p className="text-sm text-muted-foreground text-center py-8">No URLs match your filters.</p>;
+  }
+
+  return (
+    <div className="space-y-2" data-testid="domain-grouped-url-list">
+      {domainGroups.map(([domain, domainUrls]) => {
+        const expanded = expandedDomains.has(domain);
+        const missingUtmCount = domainUrls.filter((u: any) => !u.hasUtm && u.domain !== "INVALID_URL").length;
+        const utmOkCount = domainUrls.filter((u: any) => u.hasUtm).length;
+        const isInvalid = domain === "INVALID_URL";
+        return (
+          <Card key={domain} data-testid={`group-domain-${domain}`}>
+            <button
+              onClick={() => toggleDomain(domain)}
+              className="w-full text-left p-4 flex items-center gap-3 hover:bg-muted/50 transition-colors cursor-pointer"
+              data-testid={`button-toggle-domain-${domain}`}
+            >
+              {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <Globe className={`h-4 w-4 shrink-0 ${isInvalid ? "text-destructive" : "text-muted-foreground"}`} />
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="font-medium text-sm truncate">{entry.adName}</p>
-                  {entry.sourceType && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded border bg-muted text-muted-foreground shrink-0">
-                      {entry.sourceType === "shared_post" ? "Shared Post" :
-                       entry.sourceType === "link_url" ? "Link" :
-                       entry.sourceType === "link_data" ? "Link Data" :
-                       entry.sourceType === "video_data" ? "Video" :
-                       entry.sourceType === "carousel" ? "Carousel" :
-                       entry.sourceType === "asset_feed" ? "Dynamic" :
-                       entry.sourceType}
-                    </span>
-                  )}
-                </div>
-                <p className="text-muted-foreground font-mono break-all mt-0.5">{entry.destinationUrl}</p>
+                <span className={`text-sm font-medium ${isInvalid ? "text-destructive" : ""}`}>
+                  {isInvalid ? "Invalid URLs" : domain}
+                </span>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                {entry.domain === "INVALID_URL" && (
-                  <span className="text-destructive font-medium px-1.5 py-0.5 bg-destructive/10 rounded">Invalid</span>
+              <div className="flex items-center gap-3 shrink-0">
+                {utmOkCount > 0 && (
+                  <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-primary/10 text-primary">{utmOkCount} UTM</span>
                 )}
-                {!entry.hasUtm && entry.domain !== "INVALID_URL" && (
-                  <span className="text-yellow-600 font-medium px-1.5 py-0.5 bg-yellow-100 dark:bg-yellow-900/20 rounded">No UTM</span>
+                {missingUtmCount > 0 && (
+                  <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-yellow-100 text-yellow-600 dark:bg-yellow-900/20">{missingUtmCount} no UTM</span>
                 )}
-                {entry.hasUtm && (
-                  <span className="text-primary font-medium px-1.5 py-0.5 bg-primary/10 rounded">UTM OK</span>
-                )}
+                <span className="text-sm font-semibold tabular-nums">
+                  {domainUrls.length} {domainUrls.length === 1 ? "ad" : "ads"}
+                </span>
               </div>
-            </div>
-            <div className="flex items-center gap-3 text-muted-foreground flex-wrap">
-              <span>Status: {entry.effectiveStatus}</span>
-              <a href={`https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entry.adId}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-url-ad-${idx}`}>
-                Open in Ads Manager <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-              {entry.previewUrl && (
-                <a href={entry.previewUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5 text-primary" data-testid={`link-url-preview-${idx}`}>
-                  <Eye className="h-2.5 w-2.5" /> Preview
-                </a>
-              )}
-            </div>
-            {entry.hasUtm && Object.keys(entry.utmParams || {}).length > 0 && (
-              <details className="mt-1">
-                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">UTM Parameters</summary>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {Object.entries(entry.utmParams).map(([k, v]: [string, any]) => (
-                    <span key={k} className="font-mono bg-muted px-1.5 py-0.5 rounded">{k}={String(v)}</span>
-                  ))}
-                </div>
-              </details>
+            </button>
+            {expanded && (
+              <div className="border-t px-4 pb-3 pt-2 space-y-2">
+                {domainUrls.map((entry: any, idx: number) => (
+                  <div key={idx} className="p-3 rounded-md border text-xs space-y-1" data-testid={`card-url-${domain}-${idx}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-sm truncate">{entry.adName}</p>
+                          {entry.sourceType && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded border bg-muted text-muted-foreground shrink-0">
+                              {entry.sourceType === "shared_post" ? "Shared Post" :
+                               entry.sourceType === "link_url" ? "Link" :
+                               entry.sourceType === "link_data" ? "Link Data" :
+                               entry.sourceType === "video_data" ? "Video" :
+                               entry.sourceType === "carousel" ? "Carousel" :
+                               entry.sourceType === "asset_feed" ? "Dynamic" :
+                               entry.sourceType}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-muted-foreground font-mono break-all mt-0.5">{entry.destinationUrl}</p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {entry.domain === "INVALID_URL" && (
+                          <span className="text-destructive font-medium px-1.5 py-0.5 bg-destructive/10 rounded">Invalid</span>
+                        )}
+                        {!entry.hasUtm && entry.domain !== "INVALID_URL" && (
+                          <span className="text-yellow-600 font-medium px-1.5 py-0.5 bg-yellow-100 dark:bg-yellow-900/20 rounded">No UTM</span>
+                        )}
+                        {entry.hasUtm && (
+                          <span className="text-primary font-medium px-1.5 py-0.5 bg-primary/10 rounded">UTM OK</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 text-muted-foreground flex-wrap">
+                      <span>Status: {entry.effectiveStatus}</span>
+                      <a href={`https://www.facebook.com/adsmanager/manage/ads?act=${actNum}&selected_ad_ids=${entry.adId}`} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5" data-testid={`link-url-ad-${domain}-${idx}`}>
+                        Open in Ads Manager <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                      {entry.previewUrl && (
+                        <a href={entry.previewUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-0.5 text-primary" data-testid={`link-url-preview-${domain}-${idx}`}>
+                          <Eye className="h-2.5 w-2.5" /> Preview
+                        </a>
+                      )}
+                    </div>
+                    {entry.hasUtm && Object.keys(entry.utmParams || {}).length > 0 && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">UTM Parameters</summary>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {Object.entries(entry.utmParams).map(([k, v]: [string, any]) => (
+                            <span key={k} className="font-mono bg-muted px-1.5 py-0.5 rounded">{k}={String(v)}</span>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                    {entry.urlTags && !entry.hasUtm && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">URL Tags</summary>
+                        <p className="mt-1 font-mono bg-muted px-2 py-1 rounded break-all">{entry.urlTags}</p>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
-            {entry.urlTags && !entry.hasUtm && (
-              <details className="mt-1">
-                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">URL Tags</summary>
-                <p className="mt-1 font-mono bg-muted px-2 py-1 rounded break-all">{entry.urlTags}</p>
-              </details>
-            )}
-          </div>
-        ))}
-      </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }
@@ -1265,6 +1327,7 @@ interface ScanTabProps {
   severityCounts: Record<string, number>;
   issueFilterOptions: { severities: string[]; types: string[]; rules: string[]; objectives: string[]; routes: string[]; adStatuses: string[] };
   routeLabels: Record<string, string>;
+  navigateToIssuesForRule?: (ruleId: string) => void;
 }
 
 function ScanTab(props: ScanTabProps) {
@@ -1274,7 +1337,7 @@ function ScanTab(props: ScanTabProps) {
     filterRoute, setFilterRoute, filterSearch, setFilterSearch,
     filterAdStatus, setFilterAdStatus,
     hasActiveFilters, clearAllFilters,
-    severityCounts, issueFilterOptions, routeLabels,
+    severityCounts, issueFilterOptions, routeLabels, navigateToIssuesForRule,
   } = props;
   const { toast } = useToast();
   const [scanningAccountId, setScanningAccountId] = useState<number | null>(null);
@@ -1431,7 +1494,7 @@ function ScanTab(props: ScanTabProps) {
             <p className="text-xs text-muted-foreground">Showing {filteredIssues.length} of {issues.length} issues</p>
           )}
 
-          <GroupedIssueList issues={filteredIssues} accounts={accounts} allIssues={issues} />
+          <GroupedIssueList issues={filteredIssues} accounts={accounts} allIssues={issues} onOpenIssues={navigateToIssuesForRule || undefined} />
         </>
       )}
     </div>
