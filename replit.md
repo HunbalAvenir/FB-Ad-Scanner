@@ -13,7 +13,7 @@ Internal portal for managing Meta Ads quality assurance scanning across client a
 - **clients**: Client profiles with access modes, BM IDs, allowed page/IG IDs, domains, policy fields (allowedAiEnhancements, requiredUtm, allowedAspectRatios)
 - **meta_credentials**: System user tokens and user tokens with scopes, expiry tracking
 - **ad_accounts**: Ad accounts with coverage flags (identity, creative, placement, delivery)
-- **scan_issues**: Structured findings with ruleId, severity (blocker/high/medium/low), issueType (ai_toggle/placement_fit/creative_integrity/tracking/access), evidence (jsonb), recommendedFix, whyItMatters, adId/adsetId/campaignId, campaignObjective, status, routeTo
+- **scan_issues**: Structured findings with ruleId, severity (blocker/high/medium/low), issueType (ai_toggle/placement_fit/creative_integrity/tracking/access), evidence (jsonb), recommendedFix, whyItMatters, adId/adsetId/campaignId, campaignObjective, adEffectiveStatus (ACTIVE/PAUSED from Meta API), status, routeTo
 - **users**: Basic user table (auth not yet implemented)
 
 ## Scanner Rule Engine

@@ -67,7 +67,8 @@ export default function ClientDetailPage() {
     const rules = [...new Set(clientIssues.map(i => i.ruleId).filter(Boolean))] as string[];
     const objectives = [...new Set(clientIssues.map(i => (i as any).campaignObjective).filter(Boolean))] as string[];
     const routes = [...new Set(clientIssues.map(i => i.routeTo))];
-    return { severities, types, rules, objectives, routes };
+    const adStatuses = [...new Set(clientIssues.map(i => (i as any).adEffectiveStatus).filter(Boolean))] as string[];
+    return { severities, types, rules, objectives, routes, adStatuses };
   }, [clientIssues]);
 
   const severityCounts = useMemo(() => {
@@ -84,6 +85,7 @@ export default function ClientDetailPage() {
       if (filterObjective !== "all" && (i as any).campaignObjective !== filterObjective) return false;
       if (filterAccount !== "all" && i.adAccountId !== Number(filterAccount)) return false;
       if (filterRoute !== "all" && i.routeTo !== filterRoute) return false;
+      if (filterAdStatus !== "all" && (i as any).adEffectiveStatus !== filterAdStatus) return false;
       if (filterSearch) {
         const q = filterSearch.toLowerCase();
         const matches = i.message.toLowerCase().includes(q) || (i.description || "").toLowerCase().includes(q) || (i.ruleId || "").toLowerCase().includes(q);
@@ -93,7 +95,7 @@ export default function ClientDetailPage() {
     });
   };
 
-  const hasActiveIssueFilters = filterSeverity !== "all" || filterType !== "all" || filterRule !== "all" || filterObjective !== "all" || filterAccount !== "all" || filterRoute !== "all" || filterSearch !== "";
+  const hasActiveIssueFilters = filterSeverity !== "all" || filterType !== "all" || filterRule !== "all" || filterObjective !== "all" || filterAccount !== "all" || filterRoute !== "all" || filterSearch !== "" || filterAdStatus !== "all";
   const hasActiveUrlFilters = filterSearch !== "" || filterAdStatus !== "all" || filterAccount !== "all";
   const clearAllFilters = () => { setFilterSeverity("all"); setFilterType("all"); setFilterRule("all"); setFilterObjective("all"); setFilterAccount("all"); setFilterRoute("all"); setFilterSearch(""); setFilterAdStatus("all"); };
 
@@ -463,7 +465,7 @@ interface SharedFilterBarProps {
   filterObjective?: string; setFilterObjective?: (v: string) => void;
   hasActiveFilters: boolean; clearAllFilters: () => void;
   severityCounts?: Record<string, number>;
-  issueFilterOptions?: { severities: string[]; types: string[]; rules: string[]; objectives: string[]; routes: string[] };
+  issueFilterOptions?: { severities: string[]; types: string[]; rules: string[]; objectives: string[]; routes: string[]; adStatuses: string[] };
   routeLabels?: Record<string, string>;
   mode: "urls" | "scan" | "issues";
 }
@@ -592,6 +594,20 @@ function SharedFilterBar(props: SharedFilterBarProps) {
           </Select>
         )}
 
+        {showIssueFilters && issueFilterOptions && issueFilterOptions.adStatuses.length > 0 && (
+          <Select value={filterAdStatus} onValueChange={setFilterAdStatus}>
+            <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-shared-ad-live-status">
+              <SelectValue placeholder="Ad Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Ad Statuses</SelectItem>
+              {issueFilterOptions.adStatuses.map(s => (
+                <SelectItem key={s} value={s}>{s === "ACTIVE" ? "Live" : s.charAt(0) + s.slice(1).toLowerCase()}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
         {hasActiveFilters && (
           <button onClick={clearAllFilters} className="text-xs text-primary hover:underline cursor-pointer flex items-center gap-1" data-testid="button-clear-filters">
             <X className="h-3 w-3" /> Clear
@@ -698,6 +714,7 @@ function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; meta
   };
 
   const objective = (issue as any).campaignObjective;
+  const adLiveStatus = (issue as any).adEffectiveStatus;
 
   return (
     <Card data-testid={`card-issue-${issue.id}`}>
@@ -707,6 +724,11 @@ function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; meta
             <div className="flex items-center gap-2 flex-wrap">
               <StatusBadge status={issue.severity} />
               <StatusBadge status={issue.status} />
+              {adLiveStatus && (
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${adLiveStatus === "ACTIVE" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-muted text-muted-foreground"}`} data-testid={`text-ad-status-${issue.id}`}>
+                  {adLiveStatus === "ACTIVE" ? "Live" : adLiveStatus.charAt(0) + adLiveStatus.slice(1).toLowerCase()}
+                </span>
+              )}
               {issue.ruleId && (
                 <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" data-testid={`text-rule-id-${issue.id}`} title={issue.ruleId}>
                   {ruleLabel(issue.ruleId)}
@@ -1170,7 +1192,7 @@ interface ScanTabProps {
   filterAdStatus: string; setFilterAdStatus: (v: string) => void;
   hasActiveFilters: boolean; clearAllFilters: () => void;
   severityCounts: Record<string, number>;
-  issueFilterOptions: { severities: string[]; types: string[]; rules: string[]; objectives: string[]; routes: string[] };
+  issueFilterOptions: { severities: string[]; types: string[]; rules: string[]; objectives: string[]; routes: string[]; adStatuses: string[] };
   routeLabels: Record<string, string>;
 }
 
@@ -1244,6 +1266,7 @@ function ScanTab(props: ScanTabProps) {
       if (filterRule !== "all" && i.ruleId !== filterRule) return false;
       if (filterAccount !== "all" && String(i.adAccountId) !== filterAccount) return false;
       if (filterRoute !== "all" && i.routeTo !== filterRoute) return false;
+      if (filterAdStatus !== "all" && (i as any).adEffectiveStatus !== filterAdStatus) return false;
       if (filterSearch) {
         const q = filterSearch.toLowerCase();
         const matches = i.message.toLowerCase().includes(q) || (i.description || "").toLowerCase().includes(q) || (i.ruleId || "").toLowerCase().includes(q);
@@ -1251,7 +1274,7 @@ function ScanTab(props: ScanTabProps) {
       }
       return true;
     });
-  }, [issues, filterSeverity, filterType, filterRule, filterAccount, filterRoute, filterSearch]);
+  }, [issues, filterSeverity, filterType, filterRule, filterAccount, filterRoute, filterAdStatus, filterSearch]);
 
   if (accounts.length === 0) {
     return (

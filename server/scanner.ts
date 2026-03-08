@@ -39,6 +39,7 @@ interface Finding {
   campaignId?: string;
   campaignObjective?: string;
   previewUrl?: string;
+  adEffectiveStatus?: string;
 }
 
 const FEED_PLACEMENTS = ["feed", "facebook_feed", "instagram_feed", "marketplace"];
@@ -185,18 +186,19 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
     const adPreviewUrl = ad.preview_shareable_link || undefined;
     const campaign = ad.campaign_id ? campaignMap.get(ad.campaign_id) : undefined;
     const objective = campaign?.objective || undefined;
+    const adStatus = ad.effective_status;
 
     const aiFindings = checkAiToggles(ad, creative, client);
-    findings.push(...aiFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
+    findings.push(...aiFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
 
     const placementFindings = await checkPlacementFit(ad, creative, placements, client);
-    findings.push(...placementFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
+    findings.push(...placementFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
 
     const creativeFindings = checkCreativeIntegrity(ad, creative, client, pages);
-    findings.push(...creativeFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
+    findings.push(...creativeFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
 
     const trackingFindings = checkTracking(ad, creative, client);
-    findings.push(...trackingFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective })));
+    findings.push(...trackingFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
   }
 
   await storage.deleteIssuesByAdAccount(adAccount.id);
@@ -220,6 +222,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
       campaignId: finding.campaignId,
       campaignObjective: finding.campaignObjective,
       previewUrl: finding.previewUrl,
+      adEffectiveStatus: finding.adEffectiveStatus || null,
       status: "open",
       routeTo: "buyer",
     };
