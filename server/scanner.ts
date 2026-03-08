@@ -31,6 +31,7 @@ interface Finding {
   category: string;
   issueType: "ai_toggle" | "placement_fit" | "creative_integrity" | "tracking" | "access";
   message: string;
+  description?: string;
   whyItMatters: string;
   recommendedFix: string;
   evidence: Record<string, any>;
@@ -211,7 +212,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
       issueType: finding.issueType,
       severity: finding.severity,
       message: finding.message,
-      description: finding.whyItMatters,
+      description: finding.description || finding.whyItMatters,
       ruleId: finding.ruleId,
       category: finding.category,
       recommendedFix: finding.recommendedFix,
@@ -246,31 +247,95 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
   const spec = creative.object_story_spec;
   const feedSpec = creative.asset_feed_spec;
 
-  const enhancements: Array<{ key: string; ruleId: string; label: string; severity: "high" | "medium" }> = [];
+  interface Enhancement {
+    key: string;
+    ruleId: string;
+    label: string;
+    severity: "high" | "medium";
+    details: string[];
+  }
 
+  const enhancements: Enhancement[] = [];
+
+  const advantageDetails: string[] = [];
   if (spec) {
-    if (spec.link_data?.image_crops || spec.link_data?.multi_share_optimized) {
-      enhancements.push({ key: "advantage_creative", ruleId: "AI_001", label: "Advantage creative enhancements", severity: "high" });
+    if (spec.link_data?.image_crops) advantageDetails.push("Image cropping");
+    if (spec.link_data?.multi_share_optimized) advantageDetails.push("Multi-share optimization");
+  }
+  if (feedSpec) {
+    if (feedSpec.ad_formats) advantageDetails.push(`Dynamic formats (${Array.isArray(feedSpec.ad_formats) ? feedSpec.ad_formats.join(", ") : feedSpec.ad_formats})`);
+  }
+
+  const dofSpec = feedSpec?.degrees_of_freedom_spec || creative.degrees_of_freedom_spec;
+  if (dofSpec) {
+    const creativeFeaturesSpec = dofSpec?.creative_features_spec;
+    if (creativeFeaturesSpec) {
+      const featureLabels: Record<string, string> = {
+        image_background_gen: "AI Background Generation",
+        image_uncrop: "Image Uncrop/Expand",
+        image_auto_crop: "Auto Crop",
+        image_templates: "Image Templates",
+        image_touchup: "Image Touchup",
+        image_touchups: "Image Touchups",
+        text_optimizations: "Text Optimizations",
+        image_brightness_and_contrast: "Brightness/Contrast",
+        adapt_to_placement: "Adapt to Placement",
+        media_liquidity: "Media Liquidity",
+        site_extensions: "Site Extensions",
+        text_generation: "AI Text Generation",
+        describe_your_product: "Product Description",
+        inline_comment: "Inline Comment",
+        standard_enhancements: "Standard Enhancements",
+        vc_rewrite: "Visual Copy Rewrite",
+        image_enhancement: "Image Enhancement",
+        carousel_to_video: "Carousel to Video",
+        cv_transformation: "Carousel/Video Transformation",
+        description_automation: "Description Automation",
+        enhance_cta: "Enhanced CTA",
+        image_animation: "Image Animation",
+        pac_relaxation: "Placement Asset Customization",
+        replace_media_text: "Replace Media Text",
+        reveal_details_over_time: "Reveal Details Over Time",
+        show_summary: "Show Summary",
+        video_auto_crop: "Video Auto Crop",
+        video_filtering: "Video Filtering",
+        video_uncrop: "Video Uncrop/Expand",
+        advantage_plus_creative: "Advantage+ Creative",
+        text_translation: "Text Translation",
+      };
+      for (const [feature, config] of Object.entries(creativeFeaturesSpec)) {
+        const cfg = config as any;
+        if (cfg?.enroll_status === "OPT_IN" || cfg?.transformation_type) {
+          advantageDetails.push(featureLabels[feature] || feature.replace(/_/g, " "));
+        }
+      }
     }
   }
 
+  if (advantageDetails.length > 0) {
+    enhancements.push({ key: "advantage_creative", ruleId: "AI_001", label: "Advantage creative enhancements", severity: "high", details: advantageDetails });
+  }
+
   if (feedSpec) {
-    if (feedSpec.ad_formats) {
-      enhancements.push({ key: "advantage_creative", ruleId: "AI_001", label: "Advantage creative enhancements", severity: "high" });
+    const imgTransformDetails: string[] = [];
+    if (feedSpec.image_transformation_types?.includes("bg_gen")) imgTransformDetails.push("Background generation");
+    if (feedSpec.image_transformation_types?.includes("expand")) imgTransformDetails.push("Image expansion");
+    if (imgTransformDetails.length > 0) {
+      enhancements.push({ key: "image_expansion", ruleId: "AI_002", label: "Image expansion", severity: "high", details: imgTransformDetails });
     }
 
-    if (feedSpec.image_transformation_types?.includes("bg_gen") ||
-        feedSpec.image_transformation_types?.includes("expand")) {
-      enhancements.push({ key: "image_expansion", ruleId: "AI_002", label: "Image expansion", severity: "high" });
+    const textDetails: string[] = [];
+    if (feedSpec.optimization_type === "DEGREE_OF_FREEDOM") textDetails.push("Degree of freedom optimization");
+    if (feedSpec.text_optimization_type) textDetails.push(`Text optimization: ${feedSpec.text_optimization_type}`);
+    if (textDetails.length > 0) {
+      enhancements.push({ key: "auto_text", ruleId: "AI_003", label: "Auto text generation", severity: "medium", details: textDetails });
     }
 
-    if (feedSpec.optimization_type === "DEGREE_OF_FREEDOM" ||
-        feedSpec.text_optimization_type) {
-      enhancements.push({ key: "auto_text", ruleId: "AI_003", label: "Auto text generation", severity: "medium" });
-    }
-
-    if (feedSpec.music_type || feedSpec.video_filtering_type) {
-      enhancements.push({ key: "auto_music_filters", ruleId: "AI_004", label: "Auto music/filters", severity: "medium" });
+    const mediaDetails: string[] = [];
+    if (feedSpec.music_type) mediaDetails.push(`Music: ${feedSpec.music_type}`);
+    if (feedSpec.video_filtering_type) mediaDetails.push(`Video filter: ${feedSpec.video_filtering_type}`);
+    if (mediaDetails.length > 0) {
+      enhancements.push({ key: "auto_music_filters", ruleId: "AI_004", label: "Auto music/filters", severity: "medium", details: mediaDetails });
     }
   }
 
@@ -279,6 +344,7 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
     if (seenRules.has(enh.ruleId)) continue;
     seenRules.add(enh.ruleId);
 
+    const detailStr = enh.details.join(", ");
     findings.push({
       ruleId: enh.ruleId,
       severity: enh.severity,
@@ -287,7 +353,8 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
       message: `${enh.label} enabled on ad "${ad.name}"`,
       whyItMatters: "AI-modified creatives can alter your approved assets in unexpected ways, potentially misrepresenting the brand or product.",
       recommendedFix: `Disable ${enh.label.toLowerCase()} in ad settings or add "${enh.key}" to the client's allowed enhancements list.`,
-      evidence: { enhancement_type: enh.key, ad_name: ad.name },
+      evidence: { enhancement_type: enh.key, active_features: enh.details, ad_name: ad.name },
+      description: `Active AI features: ${detailStr}`,
       adId: ad.id,
       adsetId: ad.adset_id,
       campaignId: ad.campaign_id,
@@ -304,6 +371,7 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
         recommendedFix: `Disable ${enh.label.toLowerCase()} or get client approval to add it to allowed enhancements.`,
         evidence: {
           enhancement_type: enh.key,
+          active_features: enh.details,
           allowed_enhancements: client.allowedAiEnhancements || [],
           ad_name: ad.name,
         },

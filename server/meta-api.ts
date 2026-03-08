@@ -173,6 +173,7 @@ export interface MetaAdCreativeDetail {
   id: string;
   object_story_spec?: any;
   asset_feed_spec?: any;
+  degrees_of_freedom_spec?: any;
   image_url?: string;
   image_hash?: string;
   thumbnail_url?: string;
@@ -203,7 +204,7 @@ export async function getAds(accountId: string, token: string, limit = 100): Pro
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
   const res = await metaFetch<MetaAd[]>(`/${actId}/ads`, token, {
-    fields: "id,name,status,effective_status,creative{id,object_story_spec,asset_feed_spec,image_url,image_hash,thumbnail_url,video_id,call_to_action_type,link_url,instagram_actor_id,object_type,effective_object_story_id,url_tags},adset_id,campaign_id,tracking_specs,preview_shareable_link",
+    fields: "id,name,status,effective_status,creative{id,object_story_spec,asset_feed_spec,degrees_of_freedom_spec,image_url,image_hash,thumbnail_url,video_id,call_to_action_type,link_url,instagram_actor_id,object_type,effective_object_story_id,url_tags},adset_id,campaign_id,tracking_specs,preview_shareable_link",
     limit: String(limit),
   });
 
@@ -383,21 +384,6 @@ export async function getVideoThumbnail(videoId: string, token: string): Promise
   return { thumbnailUrl: data?.picture };
 }
 
-export async function getAdPreview(adId: string, token: string, format: string = "DESKTOP_FEED_STANDARD"): Promise<{
-  previewHtml?: string;
-  error?: string;
-}> {
-  const res = await metaFetch<Array<{ body: string }>>(`/${adId}/previews`, token, {
-    ad_format: format,
-  });
-
-  if (res.error) return { error: res.error.message };
-  const previews = res.data as Array<{ body: string }>;
-  if (previews && previews.length > 0) {
-    return { previewHtml: previews[0].body };
-  }
-  return { error: "No preview available" };
-}
 
 export function generateAppAccessToken(): string {
   const appId = process.env.META_APP_ID;

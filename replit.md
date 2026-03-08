@@ -18,7 +18,7 @@ Internal portal for managing Meta Ads quality assurance scanning across client a
 
 ## Scanner Rule Engine
 Rules defined in `server/scanner.ts`:
-- **AI Toggle** (AI_001-AI_005): Detects Advantage Creative Enhancements, Image Expansion, Auto Text, Auto Music/Filters, policy violations
+- **AI Toggle** (AI_001-AI_005): Detects specific Advantage Creative Enhancements (e.g., Carousel to Video, Enhanced CTA, Image Touchups, Standard Enhancements) via degrees_of_freedom_spec.creative_features_spec; Image Expansion, Auto Text, Auto Music/Filters, policy violations
 - **Placement Fit** (ASPECT_001-ASPECT_004): 9:16 in feed (blocker), square in stories (high), missing placement assets (high), extreme crop risk (medium)
 - **Creative Integrity** (CREATIVE_001-CREATIVE_004): Missing CTA, unapproved domain, wrong page, missing video thumbnail
 - **Tracking** (TRACK_001-TRACK_002): Missing UTM parameters, invalid pixel
@@ -43,8 +43,7 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 - Discovery routes: `GET /api/meta/user-ad-accounts` (lists accounts from logged-in user's token), `GET /api/meta/ad-accounts` (system user token fallback), `POST /api/meta/verify-accounts` (verify specific IDs), `POST /api/clients/bulk-import` (creates clients + ad accounts from selection)
 - Scan routes: `POST /api/scan/all`, `POST /api/scan/account/:id`, `POST /api/validate-token`
 - URL audit route: `GET /api/ad-accounts/:id/urls` — returns all destination URLs found in the account's ads with domain, UTM parameters, and Ads Manager links
-- Issues store `previewUrl` from Meta's `preview_shareable_link` field
-- Ad preview route: `GET /api/ad-preview/:adId?format=DESKTOP_FEED_STANDARD` — calls Meta's `/{ad-id}/previews` endpoint, returns embeddable iframe HTML. Used by `AdPreviewInline` component in issue cards for inline ad previews.
+- Issues store `previewUrl` from Meta's `preview_shareable_link` field (opens in new tab, requires Facebook login)
 - Ads Manager deep links use format: `https://www.facebook.com/adsmanager/manage/{type}?act={actNum}&selected_{type}_ids={id}`
 - URL audit extracts URLs from: link_url, link_data, video_data, carousel child_attachments, asset_feed_spec.link_urls, and shared_post (via effective_object_story_id)
 - Creative url_tags field fetched from Meta API for UTM tracking on shared post ads

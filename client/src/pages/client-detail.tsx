@@ -745,94 +745,6 @@ function GroupedIssueList({ issues, accounts, allIssues, onOpenIssues }: { issue
   );
 }
 
-function AdPreviewInline({ adId }: { adId: string }) {
-  const [showPreview, setShowPreview] = useState(false);
-  const { data, isLoading, error } = useQuery<{ html?: string; error?: string }>({
-    queryKey: ["/api/ad-preview", adId],
-    queryFn: async () => {
-      const res = await fetch(`/api/ad-preview/${adId}?format=DESKTOP_FEED_STANDARD`);
-      return res.json();
-    },
-    enabled: showPreview,
-    staleTime: 1000 * 60 * 30,
-  });
-
-  if (!showPreview) {
-    return (
-      <button
-        onClick={() => setShowPreview(true)}
-        className="text-xs text-primary hover:underline flex items-center gap-1 cursor-pointer mt-2"
-        data-testid={`button-show-preview-${adId}`}
-      >
-        <Eye className="h-3 w-3" /> Show Ad Preview
-      </button>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div className="mt-2 p-4 border rounded-md bg-muted/50">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Loading preview from Meta...
-        </div>
-      </div>
-    );
-  }
-
-  if (error || data?.error) {
-    return (
-      <div className="mt-2 p-3 border rounded-md bg-muted/50 text-xs text-muted-foreground flex items-center justify-between">
-        <span>Preview unavailable: {data?.error || "Could not load preview"}</span>
-        <button
-          onClick={() => setShowPreview(false)}
-          className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-          data-testid={`button-hide-preview-${adId}`}
-        >
-          Hide
-        </button>
-      </div>
-    );
-  }
-
-  if (data?.html) {
-    const iframeSrcMatch = data.html.match(/src="([^"]+)"/);
-    const iframeSrc = iframeSrcMatch?.[1];
-
-    return (
-      <div className="mt-2 space-y-1">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-muted-foreground">Ad Preview</span>
-          <button
-            onClick={() => setShowPreview(false)}
-            className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-            data-testid={`button-hide-preview-${adId}`}
-          >
-            Hide
-          </button>
-        </div>
-        {iframeSrc ? (
-          <iframe
-            src={iframeSrc}
-            sandbox="allow-scripts allow-same-origin"
-            className="border rounded-md w-full bg-white"
-            style={{ minHeight: 500 }}
-            data-testid={`preview-container-${adId}`}
-          />
-        ) : (
-          <div
-            className="border rounded-md overflow-hidden bg-white"
-            dangerouslySetInnerHTML={{ __html: data.html }}
-            data-testid={`preview-container-${adId}`}
-          />
-        )}
-      </div>
-    );
-  }
-
-  return null;
-}
-
 function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; metaAccountId?: string; allIssues?: ScanIssue[] }) {
   const { toast } = useToast();
   const mutation = useMutation({
@@ -945,12 +857,29 @@ function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; meta
             {issue.evidence && typeof issue.evidence === "object" && Object.keys(issue.evidence as Record<string, any>).length > 0 && (
               <details className="mt-2 text-xs">
                 <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Evidence</summary>
-                <pre className="mt-1 p-2 bg-muted rounded text-[11px] overflow-x-auto whitespace-pre-wrap" data-testid={`text-evidence-${issue.id}`}>
-                  {JSON.stringify(issue.evidence, null, 2)}
-                </pre>
+                <div className="mt-1 p-2 bg-muted rounded text-[11px] overflow-x-auto" data-testid={`text-evidence-${issue.id}`}>
+                  {(issue.evidence as any).active_features && Array.isArray((issue.evidence as any).active_features) ? (
+                    <div className="space-y-1">
+                      <span className="font-medium text-foreground">Active AI features:</span>
+                      <ul className="list-disc list-inside ml-1 space-y-0.5">
+                        {(issue.evidence as any).active_features.map((f: string, i: number) => (
+                          <li key={i}>{f}</li>
+                        ))}
+                      </ul>
+                      {Object.entries(issue.evidence as Record<string, any>).filter(([k]) => k !== "active_features" && k !== "ad_name" && k !== "enhancement_type").length > 0 && (
+                        <pre className="mt-2 whitespace-pre-wrap text-muted-foreground">
+                          {JSON.stringify(Object.fromEntries(Object.entries(issue.evidence as Record<string, any>).filter(([k]) => k !== "active_features" && k !== "ad_name" && k !== "enhancement_type")), null, 2)}
+                        </pre>
+                      )}
+                    </div>
+                  ) : (
+                    <pre className="whitespace-pre-wrap">
+                      {JSON.stringify(issue.evidence, null, 2)}
+                    </pre>
+                  )}
+                </div>
               </details>
             )}
-            {issue.adId && <AdPreviewInline adId={issue.adId} />}
           </div>
         </div>
         {issue.status === "open" && (
