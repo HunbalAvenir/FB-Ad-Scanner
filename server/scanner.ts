@@ -316,6 +316,82 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
     enhancements.push({ key: "advantage_creative", ruleId: "AI_001", label: "Advantage creative enhancements", severity: "high", details: advantageDetails });
   }
 
+  const dofFeatures = dofSpec?.creative_features_spec || {};
+
+  const disallowedFeatures: Array<{ key: string; label: string; ruleId: string }> = [
+    { key: "text_optimizations", label: "Text Improvements", ruleId: "AI_006" },
+    { key: "description_automation", label: "Text Improvements (Description)", ruleId: "AI_006" },
+    { key: "media_liquidity", label: "Flex Media", ruleId: "AI_007" },
+    { key: "pac_relaxation", label: "Flex Media (Placement Relaxation)", ruleId: "AI_007" },
+    { key: "describe_your_product", label: "Product Tags", ruleId: "AI_008" },
+  ];
+
+  const seenDisallowedRules = new Set<string>();
+  for (const feat of disallowedFeatures) {
+    const cfg = dofFeatures[feat.key] as any;
+    if (cfg?.enroll_status === "OPT_IN" || cfg?.transformation_type) {
+      if (seenDisallowedRules.has(feat.ruleId)) continue;
+      seenDisallowedRules.add(feat.ruleId);
+      const ruleLabels: Record<string, string> = {
+        AI_006: "Text Improvements",
+        AI_007: "Flex Media",
+        AI_008: "Product Tags",
+      };
+      findings.push({
+        ruleId: feat.ruleId,
+        severity: "high",
+        category: "AI_TOGGLE",
+        issueType: "ai_toggle",
+        message: `${ruleLabels[feat.ruleId]} enabled on ad "${ad.name}"`,
+        whyItMatters: `${ruleLabels[feat.ruleId]} must be turned off. This feature allows Meta to automatically modify your ad content which can misrepresent the brand.`,
+        recommendedFix: `Disable ${ruleLabels[feat.ruleId]!.toLowerCase()} in the ad's Advantage Creative settings.`,
+        description: `${ruleLabels[feat.ruleId]} is enabled and must be turned off.`,
+        evidence: { feature: feat.key, feature_label: feat.label, ad_name: ad.name },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
+    }
+  }
+
+  const siteExtCfg = dofFeatures.site_extensions as any;
+  if (siteExtCfg?.enroll_status === "OPT_IN" || siteExtCfg?.transformation_type) {
+    findings.push({
+      ruleId: "AI_009",
+      severity: "high",
+      category: "AI_TOGGLE",
+      issueType: "ai_toggle",
+      message: `Sitelinks enabled on ad "${ad.name}"`,
+      whyItMatters: "Sitelinks must be turned off. Meta auto-generates additional links that may direct users to unintended pages.",
+      recommendedFix: "Disable sitelinks in the ad's creative setup section.",
+      description: "Sitelinks are enabled and must be turned off.",
+      evidence: { feature: "site_extensions", ad_name: ad.name },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
+    });
+  }
+
+  const hasProducts = (feedSpec?.shops_bundle && Object.keys(feedSpec.shops_bundle).length > 0)
+    || (feedSpec?.product_set_id)
+    || (Array.isArray(feedSpec?.retailer_item_ids) && feedSpec.retailer_item_ids.length > 0);
+  if (hasProducts) {
+    findings.push({
+      ruleId: "AI_010",
+      severity: "high",
+      category: "AI_TOGGLE",
+      issueType: "ai_toggle",
+      message: `Products associated with ad "${ad.name}"`,
+      whyItMatters: "Products must not be associated with the ad. Product catalog associations can cause Meta to modify the ad with product-specific content.",
+      recommendedFix: "Remove the products association from the ad's creative setup section.",
+      description: "Products are associated with this ad and must be removed.",
+      evidence: { feature: "products_association", ad_name: ad.name },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
+    });
+  }
+
   if (feedSpec) {
     const imgTransformDetails: string[] = [];
     if (feedSpec.image_transformation_types?.includes("bg_gen")) imgTransformDetails.push("Background generation");
@@ -423,20 +499,26 @@ async function checkPlacementFit(
 
   if (!assetRatio) return findings;
 
-  if (placements.feed && isVertical(assetRatio)) {
-    findings.push({
-      ruleId: "ASPECT_001",
-      severity: "blocker",
-      category: "PLACEMENT_FIT",
-      issueType: "placement_fit",
-      message: `9:16 asset detected in Feed placement on ad "${ad.name}"`,
-      whyItMatters: "Feed placements crop vertical assets and make ads look broken.",
-      recommendedFix: "Upload a 1:1 or 4:5 version or remove Feed placements.",
-      evidence: { asset_ratio: assetRatio, placements: placements.all, width: assetWidth, height: assetHeight },
-      adId: ad.id,
-      adsetId: ad.adset_id,
-      campaignId: ad.campaign_id,
-    });
+  if (isVertical(assetRatio)) {
+    const nonStoryPlacements = placements.all.filter(p => !STORY_PLACEMENTS.includes(p.toLowerCase()));
+    const isOnlyStories = placements.all.length > 0 && nonStoryPlacements.length === 0;
+
+    if (!isOnlyStories) {
+      findings.push({
+        ruleId: "ASPECT_001",
+        severity: "blocker",
+        category: "PLACEMENT_FIT",
+        issueType: "placement_fit",
+        message: `9:16 asset in non-story placement on ad "${ad.name}"`,
+        whyItMatters: "9:16 vertical assets can only be used in Stories and Reels placements. All other placements will crop the asset and make ads look broken.",
+        recommendedFix: "Restrict this ad to Stories/Reels placements only, or upload a 1:1 or 4:5 version for other placements.",
+        description: `9:16 asset found in: ${nonStoryPlacements.length > 0 ? nonStoryPlacements.join(", ") : "automatic (all placements)"}. Must be restricted to Stories/Reels only.`,
+        evidence: { asset_ratio: assetRatio, non_story_placements: nonStoryPlacements, all_placements: placements.all, width: assetWidth, height: assetHeight },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
+    }
   }
 
   if (placements.story && isSquare(assetRatio)) {
@@ -567,6 +649,29 @@ function checkCreativeIntegrity(
         whyItMatters: "Ads running under an unapproved page misrepresent the brand identity.",
         recommendedFix: `Update the ad to use an approved page ID: ${client.allowedPageIds.join(", ")}.`,
         evidence: { page_id: pageId, approved_pages: client.allowedPageIds, ad_name: ad.name },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
+    }
+  }
+
+  const igActorId = creative.instagram_actor_id || spec?.instagram_user_id || spec?.instagram_actor_id;
+  if (igActorId && client.allowedIgActorIds && client.allowedIgActorIds.length > 0) {
+    const normalizeIgId = (id: string) => id.replace(/^ig_/, "");
+    const normalizedIgId = normalizeIgId(String(igActorId));
+    const approved = client.allowedIgActorIds.some(id => normalizeIgId(id) === normalizedIgId);
+    if (!approved) {
+      findings.push({
+        ruleId: "CREATIVE_005",
+        severity: "high",
+        category: "CREATIVE_INTEGRITY",
+        issueType: "creative_integrity",
+        message: `Wrong Instagram account on ad "${ad.name}"`,
+        whyItMatters: "Ads running under an unapproved Instagram account misrepresent the brand identity.",
+        recommendedFix: `Update the ad to use an approved Instagram account ID: ${client.allowedIgActorIds.join(", ")}.`,
+        description: `Instagram account ${igActorId} is not in the approved list.`,
+        evidence: { instagram_actor_id: igActorId, approved_ig_accounts: client.allowedIgActorIds, ad_name: ad.name },
         adId: ad.id,
         adsetId: ad.adset_id,
         campaignId: ad.campaign_id,

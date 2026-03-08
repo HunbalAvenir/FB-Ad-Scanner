@@ -18,9 +18,9 @@ Internal portal for managing Meta Ads quality assurance scanning across client a
 
 ## Scanner Rule Engine
 Rules defined in `server/scanner.ts`:
-- **AI Toggle** (AI_001-AI_005): Detects specific Advantage Creative Enhancements (e.g., Carousel to Video, Enhanced CTA, Image Touchups, Standard Enhancements) via degrees_of_freedom_spec.creative_features_spec; Image Expansion, Auto Text, Auto Music/Filters, policy violations
-- **Placement Fit** (ASPECT_001-ASPECT_004): 9:16 in feed (blocker), square in stories (high), missing placement assets (high), extreme crop risk (medium)
-- **Creative Integrity** (CREATIVE_001-CREATIVE_004): Missing CTA, unapproved domain, wrong page, missing video thumbnail
+- **AI Toggle** (AI_001-AI_010): AI_001 detects all Advantage Creative Enhancements with specific feature names via degrees_of_freedom_spec.creative_features_spec; AI_002 Image Expansion; AI_003 Auto Text; AI_004 Auto Music/Filters; AI_005 policy violations; AI_006 Text Improvements (must be off); AI_007 Flex Media (must be off); AI_008 Product Tags (must be off); AI_009 Sitelinks (must be off); AI_010 Products Associated (must be off)
+- **Placement Fit** (ASPECT_001-ASPECT_004): ASPECT_001 9:16 in any non-story/reel placement (blocker), ASPECT_002 square in stories (high), ASPECT_003 missing placement assets (high), ASPECT_004 extreme crop risk (medium)
+- **Creative Integrity** (CREATIVE_001-CREATIVE_005): Missing CTA, unapproved domain, wrong Facebook page, missing video thumbnail, wrong Instagram account
 - **Tracking** (TRACK_001-TRACK_002): Missing UTM parameters, invalid pixel
 - **Access** (ACCESS_001): Token/permission failures
 
