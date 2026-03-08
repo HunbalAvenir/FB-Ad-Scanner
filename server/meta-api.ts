@@ -383,6 +383,22 @@ export async function getVideoThumbnail(videoId: string, token: string): Promise
   return { thumbnailUrl: data?.picture };
 }
 
+export async function getAdPreview(adId: string, token: string, format: string = "DESKTOP_FEED_STANDARD"): Promise<{
+  previewHtml?: string;
+  error?: string;
+}> {
+  const res = await metaFetch<Array<{ body: string }>>(`/${adId}/previews`, token, {
+    ad_format: format,
+  });
+
+  if (res.error) return { error: res.error.message };
+  const previews = res.data as Array<{ body: string }>;
+  if (previews && previews.length > 0) {
+    return { previewHtml: previews[0].body };
+  }
+  return { error: "No preview available" };
+}
+
 export function generateAppAccessToken(): string {
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;

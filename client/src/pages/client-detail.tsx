@@ -745,6 +745,94 @@ function GroupedIssueList({ issues, accounts, allIssues, onOpenIssues }: { issue
   );
 }
 
+function AdPreviewInline({ adId }: { adId: string }) {
+  const [showPreview, setShowPreview] = useState(false);
+  const { data, isLoading, error } = useQuery<{ html?: string; error?: string }>({
+    queryKey: ["/api/ad-preview", adId],
+    queryFn: async () => {
+      const res = await fetch(`/api/ad-preview/${adId}?format=DESKTOP_FEED_STANDARD`);
+      return res.json();
+    },
+    enabled: showPreview,
+    staleTime: 1000 * 60 * 30,
+  });
+
+  if (!showPreview) {
+    return (
+      <button
+        onClick={() => setShowPreview(true)}
+        className="text-xs text-primary hover:underline flex items-center gap-1 cursor-pointer mt-2"
+        data-testid={`button-show-preview-${adId}`}
+      >
+        <Eye className="h-3 w-3" /> Show Ad Preview
+      </button>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="mt-2 p-4 border rounded-md bg-muted/50">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Loading preview from Meta...
+        </div>
+      </div>
+    );
+  }
+
+  if (error || data?.error) {
+    return (
+      <div className="mt-2 p-3 border rounded-md bg-muted/50 text-xs text-muted-foreground flex items-center justify-between">
+        <span>Preview unavailable: {data?.error || "Could not load preview"}</span>
+        <button
+          onClick={() => setShowPreview(false)}
+          className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+          data-testid={`button-hide-preview-${adId}`}
+        >
+          Hide
+        </button>
+      </div>
+    );
+  }
+
+  if (data?.html) {
+    const iframeSrcMatch = data.html.match(/src="([^"]+)"/);
+    const iframeSrc = iframeSrcMatch?.[1];
+
+    return (
+      <div className="mt-2 space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground">Ad Preview</span>
+          <button
+            onClick={() => setShowPreview(false)}
+            className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+            data-testid={`button-hide-preview-${adId}`}
+          >
+            Hide
+          </button>
+        </div>
+        {iframeSrc ? (
+          <iframe
+            src={iframeSrc}
+            sandbox="allow-scripts allow-same-origin"
+            className="border rounded-md w-full bg-white"
+            style={{ minHeight: 500 }}
+            data-testid={`preview-container-${adId}`}
+          />
+        ) : (
+          <div
+            className="border rounded-md overflow-hidden bg-white"
+            dangerouslySetInnerHTML={{ __html: data.html }}
+            data-testid={`preview-container-${adId}`}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; metaAccountId?: string; allIssues?: ScanIssue[] }) {
   const { toast } = useToast();
   const mutation = useMutation({
@@ -862,6 +950,7 @@ function IssueCard({ issue, metaAccountId, allIssues }: { issue: ScanIssue; meta
                 </pre>
               </details>
             )}
+            {issue.adId && <AdPreviewInline adId={issue.adId} />}
           </div>
         </div>
         {issue.status === "open" && (

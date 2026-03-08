@@ -5,7 +5,7 @@ import { storage } from "./storage";
 import { insertClientSchema, insertCredentialSchema, insertAdAccountSchema, insertScanIssueSchema } from "@shared/schema";
 import { z } from "zod";
 import { scanAllAccounts, scanSingleAccount, auditAccountUrls } from "./scanner";
-import { validateToken, smokeTestAdAccount, listAdAccounts } from "./meta-api";
+import { validateToken, smokeTestAdAccount, listAdAccounts, getAdPreview } from "./meta-api";
 
 function getBaseUrl(req: any): string {
   const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
@@ -371,6 +371,20 @@ export async function registerRoutes(
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/ad-preview/:adId", async (req, res) => {
+    const { adId } = req.params;
+    const format = (req.query.format as string) || "DESKTOP_FEED_STANDARD";
+    try {
+      const token = process.env.META_SYSTEM_USER_TOKEN;
+      if (!token) return res.status(500).json({ error: "No system user token configured" });
+      const result = await getAdPreview(adId, token, format);
+      if (result.error) return res.status(400).json({ error: result.error });
+      res.json({ html: result.previewHtml });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

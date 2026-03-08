@@ -44,6 +44,7 @@ Scanner clears old issues per account before each scan via `storage.deleteIssues
 - Scan routes: `POST /api/scan/all`, `POST /api/scan/account/:id`, `POST /api/validate-token`
 - URL audit route: `GET /api/ad-accounts/:id/urls` — returns all destination URLs found in the account's ads with domain, UTM parameters, and Ads Manager links
 - Issues store `previewUrl` from Meta's `preview_shareable_link` field
+- Ad preview route: `GET /api/ad-preview/:adId?format=DESKTOP_FEED_STANDARD` — calls Meta's `/{ad-id}/previews` endpoint, returns embeddable iframe HTML. Used by `AdPreviewInline` component in issue cards for inline ad previews.
 - Ads Manager deep links use format: `https://www.facebook.com/adsmanager/manage/{type}?act={actNum}&selected_{type}_ids={id}`
 - URL audit extracts URLs from: link_url, link_data, video_data, carousel child_attachments, asset_feed_spec.link_urls, and shared_post (via effective_object_story_id)
 - Creative url_tags field fetched from Meta API for UTM tracking on shared post ads
