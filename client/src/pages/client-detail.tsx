@@ -1050,24 +1050,29 @@ function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { a
     queryKey: [`/api/ad-accounts/${account.id}/urls`],
   });
 
-  const urls = data?.urls || [];
-  const domains = [...new Set(urls.map(u => u.domain))];
-  const invalidUrls = urls.filter(u => u.domain === "INVALID_URL");
-  const missingUtm = urls.filter(u => !u.hasUtm);
+  const allUrls = data?.urls || [];
   const actNum = account.accountId.replace("act_", "");
 
-  const preFilteredUrls = useMemo(() => {
-    let list = urls;
+  const statusFilteredUrls = useMemo(() => {
     if (statusFilter !== "all") {
-      list = list.filter(u => u.effectiveStatus === statusFilter);
+      return allUrls.filter(u => u.effectiveStatus === statusFilter);
     }
+    return allUrls;
+  }, [allUrls, statusFilter]);
+
+  const domains = useMemo(() => [...new Set(statusFilteredUrls.map(u => u.domain))], [statusFilteredUrls]);
+  const invalidUrls = useMemo(() => statusFilteredUrls.filter(u => u.domain === "INVALID_URL"), [statusFilteredUrls]);
+  const missingUtm = useMemo(() => statusFilteredUrls.filter(u => !u.hasUtm), [statusFilteredUrls]);
+
+  const preFilteredUrls = useMemo(() => {
+    let list = statusFilteredUrls;
     if (activeFilter) {
       if (activeFilter.type === "domain") list = list.filter(u => u.domain === activeFilter.value);
       else if (activeFilter.type === "invalid") list = list.filter(u => u.domain === "INVALID_URL");
       else if (activeFilter.type === "missingUtm") list = list.filter(u => !u.hasUtm);
     }
     return list;
-  }, [urls, statusFilter, activeFilter]);
+  }, [statusFilteredUrls, activeFilter]);
 
   const filteredUrls = useMemo(() => {
     if (!searchQuery) return preFilteredUrls;
@@ -1101,7 +1106,7 @@ function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { a
     return <div className="p-4 text-sm text-destructive bg-destructive/5 rounded-md">{data.error}</div>;
   }
 
-  if (urls.length === 0) {
+  if (allUrls.length === 0) {
     return <p className="text-sm text-muted-foreground py-4">No destination URLs found in this account's ads.</p>;
   }
 
@@ -1113,7 +1118,7 @@ function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { a
           className={`px-2 py-0.5 rounded-md text-sm cursor-pointer transition-colors ${!activeFilter ? "bg-primary/10 text-primary font-medium" : "hover-elevate"}`}
           data-testid="filter-url-all"
         >
-          {urls.length} URL{urls.length !== 1 ? "s" : ""} found
+          {statusFilteredUrls.length} URL{statusFilteredUrls.length !== 1 ? "s" : ""} found
         </button>
         {invalidUrls.length > 0 && (
           <button
@@ -1138,7 +1143,7 @@ function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { a
       {(activeFilter || searchQuery || statusFilter !== "all") && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>
-            Showing {filteredUrls.length} of {urls.length} URLs
+            Showing {filteredUrls.length} of {statusFilteredUrls.length} URLs
             {activeFilter?.type === "domain" && ` in ${activeFilter.value}`}
             {activeFilter?.type === "invalid" && " with invalid URLs"}
             {activeFilter?.type === "missingUtm" && " missing UTM parameters"}
@@ -1171,7 +1176,7 @@ function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { a
                 }`}
                 data-testid={`filter-domain-${d}`}
               >
-                <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d} ({urls.filter(u => u.domain === d).length})
+                <Globe className="h-2.5 w-2.5 inline mr-0.5" />{d} ({statusFilteredUrls.filter(u => u.domain === d).length})
               </button>
             ))}
           </div>
