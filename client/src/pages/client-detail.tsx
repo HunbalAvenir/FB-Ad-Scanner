@@ -1157,7 +1157,7 @@ function UrlAuditInline({ account, searchQuery = "", statusFilter = "all" }: { a
         </div>
       )}
 
-      {domains.length > 1 && (
+      {domains.length >= 1 && (
         <div className="p-3 rounded-md bg-muted">
           <p className="text-xs font-medium mb-1">Domains in use:</p>
           <div className="flex flex-wrap gap-2">
@@ -1431,22 +1431,7 @@ function ScanTab(props: ScanTabProps) {
             <p className="text-xs text-muted-foreground">Showing {filteredIssues.length} of {issues.length} issues</p>
           )}
 
-          <div className="space-y-3">
-            {filteredIssues.map(issue => {
-              const account = accounts.find(a => a.id === issue.adAccountId);
-              return (
-                <IssueCard
-                  key={issue.id}
-                  issue={issue}
-                  metaAccountId={account?.accountId}
-                  allIssues={issues}
-                />
-              );
-            })}
-            {filteredIssues.length === 0 && hasActiveFilters && (
-              <p className="text-sm text-muted-foreground text-center py-8">No issues match your filters.</p>
-            )}
-          </div>
+          <GroupedIssueList issues={filteredIssues} accounts={accounts} allIssues={issues} />
         </>
       )}
     </div>
