@@ -441,7 +441,11 @@ function checkCreativeIntegrity(
   const isLinkAd = creative.object_type === "SHARE" || creative.link_url || spec?.link_data;
   if (isLinkAd && !creative.call_to_action_type) {
     const ctaFromSpec = spec?.link_data?.call_to_action?.type || spec?.video_data?.call_to_action?.type;
-    if (!ctaFromSpec) {
+    const afs = creative.asset_feed_spec;
+    const ctaFromAssetFeed = afs?.call_to_action_types?.length > 0
+      || afs?.call_to_actions?.length > 0
+      || afs?.link_urls?.some((lu: any) => lu.call_to_action?.type);
+    if (!ctaFromSpec && !ctaFromAssetFeed) {
       findings.push({
         ruleId: "CREATIVE_001",
         severity: "medium",

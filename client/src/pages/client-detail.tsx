@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, AlertOctagon, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw, Filter, X, Info, Pencil, Search } from "lucide-react";
+import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, AlertOctagon, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw, Filter, X, Info, Pencil, Search, ChevronDown, ChevronRight } from "lucide-react";
 import { useState, useMemo } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -196,7 +196,7 @@ export default function ClientDetailPage() {
             <Shield className="h-3.5 w-3.5 mr-1" /> Credentials ({credentials?.length || 0})
           </TabsTrigger>
           <TabsTrigger value="issues" data-testid="tab-issues">
-            <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Issues ({clientIssues.length})
+            <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Issues {hasActiveIssueFilters ? `(${filteredOpen.length + filteredAcknowledged.length + filteredClosed.length}/${clientIssues.length})` : `(${clientIssues.length})`}
           </TabsTrigger>
           <TabsTrigger value="onboarding" data-testid="tab-onboarding">
             <FileText className="h-3.5 w-3.5 mr-1" /> Onboarding
@@ -359,35 +359,14 @@ export default function ClientDetailPage() {
                     Closed ({filteredClosed.length}{hasActiveIssueFilters ? `/${closedIssues.length}` : ""})
                   </TabsTrigger>
                 </TabsList>
-                <TabsContent value="open" className="mt-3 space-y-3">
-                  {filteredOpen.length === 0 ? (
-                    <Card><CardContent className="flex flex-col items-center justify-center py-8"><CheckCircle2 className="h-8 w-8 text-primary mb-2 opacity-60" /><p className="text-sm font-medium">No open issues</p></CardContent></Card>
-                  ) : (
-                    filteredOpen.map(issue => {
-                      const acct = accounts?.find(a => a.id === issue.adAccountId);
-                      return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
-                    })
-                  )}
+                <TabsContent value="open" className="mt-3">
+                  <GroupedIssueList issues={filteredOpen} accounts={accounts} allIssues={clientIssues} />
                 </TabsContent>
-                <TabsContent value="acknowledged" className="mt-3 space-y-3">
-                  {filteredAcknowledged.length === 0 ? (
-                    <Card><CardContent className="flex flex-col items-center justify-center py-8"><Info className="h-8 w-8 text-muted-foreground mb-2 opacity-60" /><p className="text-sm font-medium">No in-progress issues</p></CardContent></Card>
-                  ) : (
-                    filteredAcknowledged.map(issue => {
-                      const acct = accounts?.find(a => a.id === issue.adAccountId);
-                      return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
-                    })
-                  )}
+                <TabsContent value="acknowledged" className="mt-3">
+                  <GroupedIssueList issues={filteredAcknowledged} accounts={accounts} allIssues={clientIssues} />
                 </TabsContent>
-                <TabsContent value="closed" className="mt-3 space-y-3">
-                  {filteredClosed.length === 0 ? (
-                    <Card><CardContent className="flex flex-col items-center justify-center py-8"><CheckCircle2 className="h-8 w-8 text-primary mb-2 opacity-60" /><p className="text-sm font-medium">No closed issues</p></CardContent></Card>
-                  ) : (
-                    filteredClosed.map(issue => {
-                      const acct = accounts?.find(a => a.id === issue.adAccountId);
-                      return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={clientIssues} />;
-                    })
-                  )}
+                <TabsContent value="closed" className="mt-3">
+                  <GroupedIssueList issues={filteredClosed} accounts={accounts} allIssues={clientIssues} />
                 </TabsContent>
               </Tabs>
             </>
@@ -655,6 +634,93 @@ function SharedFilterBar(props: SharedFilterBarProps) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function GroupedIssueList({ issues, accounts, allIssues }: { issues: ScanIssue[]; accounts?: AdAccount[]; allIssues: ScanIssue[] }) {
+  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
+
+  const groups = useMemo(() => {
+    const map = new Map<string, ScanIssue[]>();
+    for (const issue of issues) {
+      const key = issue.ruleId || `no-rule-${issue.issueType}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(issue);
+    }
+    const sorted = [...map.entries()].sort((a, b) => {
+      const sevOrder: Record<string, number> = { blocker: 0, high: 1, medium: 2, low: 3 };
+      const aSev = sevOrder[a[1][0].severity] ?? 4;
+      const bSev = sevOrder[b[1][0].severity] ?? 4;
+      if (aSev !== bSev) return aSev - bSev;
+      return b[1].length - a[1].length;
+    });
+    return sorted;
+  }, [issues]);
+
+  const toggleRule = (ruleKey: string) => {
+    setExpandedRules(prev => {
+      const next = new Set(prev);
+      if (next.has(ruleKey)) next.delete(ruleKey); else next.add(ruleKey);
+      return next;
+    });
+  };
+
+  const routeLabels: Record<string, string> = { ops: "Ops", account_manager: "AM", buyer: "Buyer", client: "Client" };
+
+  if (groups.length === 0) {
+    return <Card><CardContent className="flex flex-col items-center justify-center py-8"><CheckCircle2 className="h-8 w-8 text-primary mb-2 opacity-60" /><p className="text-sm font-medium">No issues</p></CardContent></Card>;
+  }
+
+  return (
+    <div className="space-y-2" data-testid="grouped-issue-list">
+      {groups.map(([ruleKey, ruleIssues]) => {
+        const expanded = expandedRules.has(ruleKey);
+        const first = ruleIssues[0];
+        const uniqueAds = new Set(ruleIssues.map(i => i.adId).filter(Boolean)).size;
+        const liveCount = ruleIssues.filter(i => (i as any).adEffectiveStatus === "ACTIVE").length;
+        return (
+          <Card key={ruleKey} data-testid={`group-${ruleKey}`}>
+            <button
+              onClick={() => toggleRule(ruleKey)}
+              className="w-full text-left p-4 flex items-center gap-3 hover:bg-muted/50 transition-colors cursor-pointer"
+              data-testid={`button-toggle-group-${ruleKey}`}
+            >
+              {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <StatusBadge status={first.severity} />
+                  <span className="text-sm font-medium">{ruleLabel(first.ruleId)}</span>
+                  <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{first.ruleId || first.issueType}</span>
+                  <span className="text-xs text-muted-foreground">Route: {routeLabels[first.routeTo] || first.routeTo}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">{first.whyItMatters || first.description}</p>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                {liveCount > 0 && (
+                  <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" data-testid={`text-live-count-${ruleKey}`}>
+                    {liveCount} live
+                  </span>
+                )}
+                <span className="text-sm font-semibold tabular-nums" data-testid={`text-count-${ruleKey}`}>
+                  {ruleIssues.length} {ruleIssues.length === 1 ? "issue" : "issues"}
+                </span>
+                {uniqueAds > 0 && (
+                  <span className="text-xs text-muted-foreground">{uniqueAds} {uniqueAds === 1 ? "ad" : "ads"}</span>
+                )}
+              </div>
+            </button>
+            {expanded && (
+              <div className="border-t border-card-border px-4 pb-4 pt-2 space-y-3">
+                {ruleIssues.map(issue => {
+                  const acct = accounts?.find(a => a.id === issue.adAccountId);
+                  return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={allIssues} />;
+                })}
+              </div>
+            )}
+          </Card>
+        );
+      })}
     </div>
   );
 }
