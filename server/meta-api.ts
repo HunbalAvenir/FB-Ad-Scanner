@@ -313,6 +313,19 @@ export async function getAccountPages(accountId: string, token: string): Promise
   return { pages: res.data as Array<{ id: string; name: string }> };
 }
 
+export async function getAccountInstagramAccounts(accountId: string, token: string): Promise<{
+  igAccounts?: Array<{ id: string; username?: string; name?: string }>;
+  error?: string;
+}> {
+  const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
+  const res = await metaFetch<any[]>(`/${actId}/instagram_accounts`, token, {
+    fields: "id,username,name",
+  });
+
+  if (res.error) return { error: res.error.message };
+  return { igAccounts: res.data as Array<{ id: string; username?: string; name?: string }> };
+}
+
 export interface ImageMetadata {
   width: number;
   height: number;

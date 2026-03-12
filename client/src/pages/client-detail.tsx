@@ -647,24 +647,29 @@ function SharedFilterBar(props: SharedFilterBarProps) {
   );
 }
 
+const TIER1_RULES = new Set(["ASPECT_001", "AI_006", "AI_007", "CREATIVE_003", "CREATIVE_005"]);
+
 function GroupedIssueList({ issues, accounts, allIssues, onOpenIssues }: { issues: ScanIssue[]; accounts?: AdAccount[]; allIssues: ScanIssue[]; onOpenIssues?: (ruleId: string) => void }) {
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
 
-  const groups = useMemo(() => {
+  const { tier1Groups, otherGroups } = useMemo(() => {
     const map = new Map<string, ScanIssue[]>();
     for (const issue of issues) {
       const key = issue.ruleId || `no-rule-${issue.issueType}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(issue);
     }
-    const sorted = [...map.entries()].sort((a, b) => {
-      const sevOrder: Record<string, number> = { blocker: 0, high: 1, medium: 2, low: 3 };
+    const sevOrder: Record<string, number> = { blocker: 0, high: 1, medium: 2, low: 3 };
+    const sortFn = (a: [string, ScanIssue[]], b: [string, ScanIssue[]]) => {
       const aSev = sevOrder[a[1][0].severity] ?? 4;
       const bSev = sevOrder[b[1][0].severity] ?? 4;
       if (aSev !== bSev) return aSev - bSev;
       return b[1].length - a[1].length;
-    });
-    return sorted;
+    };
+    const allEntries = [...map.entries()];
+    const tier1Groups = allEntries.filter(([key]) => TIER1_RULES.has(key)).sort(sortFn);
+    const otherGroups = allEntries.filter(([key]) => !TIER1_RULES.has(key)).sort(sortFn);
+    return { tier1Groups, otherGroups };
   }, [issues]);
 
   const toggleRule = (ruleKey: string) => {
@@ -677,70 +682,98 @@ function GroupedIssueList({ issues, accounts, allIssues, onOpenIssues }: { issue
 
   const routeLabels: Record<string, string> = { ops: "Ops", account_manager: "AM", buyer: "Buyer", client: "Client" };
 
-  if (groups.length === 0) {
+  const allGroups = [...tier1Groups, ...otherGroups];
+  if (allGroups.length === 0) {
     return <Card><CardContent className="flex flex-col items-center justify-center py-8"><CheckCircle2 className="h-8 w-8 text-primary mb-2 opacity-60" /><p className="text-sm font-medium">No issues</p></CardContent></Card>;
   }
 
-  return (
-    <div className="space-y-2" data-testid="grouped-issue-list">
-      {groups.map(([ruleKey, ruleIssues]) => {
-        const expanded = expandedRules.has(ruleKey);
-        const first = ruleIssues[0];
-        const uniqueAds = new Set(ruleIssues.map(i => i.adId).filter(Boolean)).size;
-        const liveCount = ruleIssues.filter(i => (i as any).adEffectiveStatus === "ACTIVE").length;
-        return (
-          <Card key={ruleKey} data-testid={`group-${ruleKey}`}>
+  const renderGroup = ([ruleKey, ruleIssues]: [string, ScanIssue[]], isTier1: boolean) => {
+    const expanded = expandedRules.has(ruleKey);
+    const first = ruleIssues[0];
+    const uniqueAds = new Set(ruleIssues.map(i => i.adId).filter(Boolean)).size;
+    const liveCount = ruleIssues.filter(i => (i as any).adEffectiveStatus === "ACTIVE").length;
+    return (
+      <Card key={ruleKey} data-testid={`group-${ruleKey}`} className={isTier1 ? "border-destructive/40 bg-destructive/5" : ""}>
+        <button
+          onClick={() => toggleRule(ruleKey)}
+          className="w-full text-left p-4 flex items-center gap-3 hover:bg-muted/50 transition-colors cursor-pointer"
+          data-testid={`button-toggle-group-${ruleKey}`}
+        >
+          {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <StatusBadge status={first.severity} />
+              <span className="text-sm font-medium">{ruleLabel(first.ruleId)}</span>
+              <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{first.ruleId || first.issueType}</span>
+              <span className="text-xs text-muted-foreground">Route: {routeLabels[first.routeTo] || first.routeTo}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">{first.whyItMatters || first.description}</p>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            {liveCount > 0 && (
+              <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" data-testid={`text-live-count-${ruleKey}`}>
+                {liveCount} live
+              </span>
+            )}
+            <span className="text-sm font-semibold tabular-nums" data-testid={`text-count-${ruleKey}`}>
+              {ruleIssues.length} {ruleIssues.length === 1 ? "issue" : "issues"}
+            </span>
+            {uniqueAds > 0 && (
+              <span className="text-xs text-muted-foreground">{uniqueAds} {uniqueAds === 1 ? "ad" : "ads"}</span>
+            )}
+          </div>
+        </button>
+        {onOpenIssues && (
+          <div className="px-4 pb-2 -mt-1">
             <button
-              onClick={() => toggleRule(ruleKey)}
-              className="w-full text-left p-4 flex items-center gap-3 hover:bg-muted/50 transition-colors cursor-pointer"
-              data-testid={`button-toggle-group-${ruleKey}`}
+              onClick={() => onOpenIssues(ruleKey)}
+              className="text-xs text-primary hover:underline cursor-pointer"
+              data-testid={`link-open-issues-${ruleKey}`}
             >
-              {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <StatusBadge status={first.severity} />
-                  <span className="text-sm font-medium">{ruleLabel(first.ruleId)}</span>
-                  <span className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{first.ruleId || first.issueType}</span>
-                  <span className="text-xs text-muted-foreground">Route: {routeLabels[first.routeTo] || first.routeTo}</span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">{first.whyItMatters || first.description}</p>
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                {liveCount > 0 && (
-                  <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" data-testid={`text-live-count-${ruleKey}`}>
-                    {liveCount} live
-                  </span>
-                )}
-                <span className="text-sm font-semibold tabular-nums" data-testid={`text-count-${ruleKey}`}>
-                  {ruleIssues.length} {ruleIssues.length === 1 ? "issue" : "issues"}
-                </span>
-                {uniqueAds > 0 && (
-                  <span className="text-xs text-muted-foreground">{uniqueAds} {uniqueAds === 1 ? "ad" : "ads"}</span>
-                )}
-              </div>
+              Open in Issues tab to resolve
             </button>
-            {onOpenIssues && (
-              <div className="px-4 pb-2 -mt-1">
-                <button
-                  onClick={() => onOpenIssues(ruleKey)}
-                  className="text-xs text-primary hover:underline cursor-pointer"
-                  data-testid={`link-open-issues-${ruleKey}`}
-                >
-                  Open in Issues tab to resolve
-                </button>
-              </div>
-            )}
-            {expanded && (
-              <div className="border-t border-card-border px-4 pb-4 pt-2 space-y-3">
-                {ruleIssues.map(issue => {
-                  const acct = accounts?.find(a => a.id === issue.adAccountId);
-                  return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={allIssues} />;
-                })}
-              </div>
-            )}
-          </Card>
-        );
-      })}
+          </div>
+        )}
+        {expanded && (
+          <div className="border-t border-card-border px-4 pb-4 pt-2 space-y-3">
+            {ruleIssues.map(issue => {
+              const acct = accounts?.find(a => a.id === issue.adAccountId);
+              return <IssueCard key={issue.id} issue={issue} metaAccountId={acct?.accountId} allIssues={allIssues} />;
+            })}
+          </div>
+        )}
+      </Card>
+    );
+  };
+
+  return (
+    <div className="space-y-4" data-testid="grouped-issue-list">
+      {tier1Groups.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
+            <div className="h-px flex-1 bg-destructive/30" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-destructive" data-testid="label-tier1-section">
+              Tier 1 — Priority Issues
+            </span>
+            <div className="h-px flex-1 bg-destructive/30" />
+          </div>
+          {tier1Groups.map(group => renderGroup(group, true))}
+        </div>
+      )}
+      {otherGroups.length > 0 && (
+        <div className="space-y-2">
+          {tier1Groups.length > 0 && (
+            <div className="flex items-center gap-2 px-1">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Other Issues
+              </span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+          )}
+          {otherGroups.map(group => renderGroup(group, false))}
+        </div>
+      )}
     </div>
   );
 }

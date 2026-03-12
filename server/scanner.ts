@@ -6,6 +6,7 @@ import {
   getAdSets,
   getCampaigns,
   getAccountPages,
+  getAccountInstagramAccounts,
   getImageMetadata,
   type MetaAd,
   type MetaAdSet,
@@ -134,11 +135,12 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
 
   log(`Smoke test passed for ${adAccount.accountId}, pulling data...`, "scanner");
 
-  const [adsResult, adSetsResult, campaignsResult, pagesResult] = await Promise.all([
+  const [adsResult, adSetsResult, campaignsResult, pagesResult, igResult] = await Promise.all([
     getAds(adAccount.accountId, token),
     getAdSets(adAccount.accountId, token),
     getCampaigns(adAccount.accountId, token),
     getAccountPages(adAccount.accountId, token),
+    getAccountInstagramAccounts(adAccount.accountId, token),
   ]);
 
   const coverageUpdate: Partial<typeof adAccount> = {
@@ -164,6 +166,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
   const adsets = adSetsResult.adsets || [];
   const campaigns = campaignsResult.campaigns || [];
   const pages = pagesResult.pages || [];
+  const igAccounts = igResult.igAccounts || [];
 
   const adsetMap = new Map<string, MetaAdSet>();
   for (const adset of adsets) {
@@ -195,7 +198,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
     const placementFindings = await checkPlacementFit(ad, creative, placements, client);
     findings.push(...placementFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
 
-    const creativeFindings = checkCreativeIntegrity(ad, creative, client, pages);
+    const creativeFindings = checkCreativeIntegrity(ad, creative, client, pages, igAccounts);
     findings.push(...creativeFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
 
     const trackingFindings = checkTracking(ad, creative, client);
@@ -524,7 +527,7 @@ async function checkPlacementFit(
   if (placements.story && isSquare(assetRatio)) {
     findings.push({
       ruleId: "ASPECT_002",
-      severity: "high",
+      severity: "medium",
       category: "PLACEMENT_FIT",
       issueType: "placement_fit",
       message: `Square asset in Stories/Reels placement on ad "${ad.name}"`,
@@ -583,7 +586,8 @@ function checkCreativeIntegrity(
   ad: MetaAd,
   creative: MetaAdCreativeDetail,
   client: Client,
-  pages: Array<{ id: string; name: string }>
+  pages: Array<{ id: string; name: string }>,
+  igAccounts: Array<{ id: string; username?: string; name?: string }>
 ): Finding[] {
   const findings: Finding[] = [];
   const spec = creative.object_story_spec;
@@ -637,18 +641,29 @@ function checkCreativeIntegrity(
   }
 
   const pageId = spec?.page_id || creative.effective_object_story_id?.split("_")[0];
-  if (pageId && client.allowedPageIds && client.allowedPageIds.length > 0) {
-    const approved = client.allowedPageIds.some(id => id === pageId || id === `page_${pageId}` || `page_${id}` === pageId);
-    if (!approved) {
+  if (pageId) {
+    const accountPageIds = pages.map(p => p.id);
+    const allowedPageIds = client.allowedPageIds || [];
+    const normalizePageId = (id: string) => id.replace(/^page_/, "");
+    const normalizedPageId = normalizePageId(pageId);
+    const inAccountPages = accountPageIds.length > 0 && accountPageIds.some(id => normalizePageId(id) === normalizedPageId);
+    const inAllowedList = allowedPageIds.length > 0 && allowedPageIds.some(id => normalizePageId(id) === normalizedPageId);
+    const hasValidationData = accountPageIds.length > 0 || allowedPageIds.length > 0;
+    const approved = inAccountPages || inAllowedList;
+    if (hasValidationData && !approved) {
+      const usedPage = pages.find(p => normalizePageId(p.id) === normalizedPageId);
+      const accountPageNames = pages.map(p => p.name).filter(Boolean);
       findings.push({
         ruleId: "CREATIVE_003",
         severity: "high",
         category: "CREATIVE_INTEGRITY",
         issueType: "creative_integrity",
         message: `Wrong Facebook page on ad "${ad.name}"`,
-        whyItMatters: "Ads running under an unapproved page misrepresent the brand identity.",
-        recommendedFix: `Update the ad to use an approved page ID: ${client.allowedPageIds.join(", ")}.`,
-        evidence: { page_id: pageId, approved_pages: client.allowedPageIds, ad_name: ad.name },
+        whyItMatters: "Ads running under a Facebook page not associated with this ad account misrepresent the brand identity.",
+        recommendedFix: accountPageIds.length > 0
+          ? `Update the ad to use one of the pages connected to this ad account: ${accountPageNames.join(", ") || accountPageIds.join(", ")}.`
+          : `Update the ad to use an approved page ID: ${allowedPageIds.join(", ")}.`,
+        evidence: { page_id: pageId, ad_name: ad.name, account_pages: accountPageNames.length > 0 ? accountPageNames : accountPageIds },
         adId: ad.id,
         adsetId: ad.adset_id,
         campaignId: ad.campaign_id,
@@ -657,21 +672,29 @@ function checkCreativeIntegrity(
   }
 
   const igActorId = creative.instagram_actor_id || spec?.instagram_user_id || spec?.instagram_actor_id;
-  if (igActorId && client.allowedIgActorIds && client.allowedIgActorIds.length > 0) {
+  if (igActorId) {
     const normalizeIgId = (id: string) => id.replace(/^ig_/, "");
     const normalizedIgId = normalizeIgId(String(igActorId));
-    const approved = client.allowedIgActorIds.some(id => normalizeIgId(id) === normalizedIgId);
-    if (!approved) {
+    const accountIgIds = igAccounts.map(a => a.id);
+    const allowedIgIds = client.allowedIgActorIds || [];
+    const inAccountIg = accountIgIds.length > 0 && accountIgIds.some(id => normalizeIgId(id) === normalizedIgId);
+    const inAllowedIg = allowedIgIds.length > 0 && allowedIgIds.some(id => normalizeIgId(id) === normalizedIgId);
+    const hasValidationData = accountIgIds.length > 0 || allowedIgIds.length > 0;
+    const approved = inAccountIg || inAllowedIg;
+    if (hasValidationData && !approved) {
+      const accountIgNames = igAccounts.map(a => a.username || a.name).filter(Boolean);
       findings.push({
         ruleId: "CREATIVE_005",
         severity: "high",
         category: "CREATIVE_INTEGRITY",
         issueType: "creative_integrity",
         message: `Wrong Instagram account on ad "${ad.name}"`,
-        whyItMatters: "Ads running under an unapproved Instagram account misrepresent the brand identity.",
-        recommendedFix: `Update the ad to use an approved Instagram account ID: ${client.allowedIgActorIds.join(", ")}.`,
-        description: `Instagram account ${igActorId} is not in the approved list.`,
-        evidence: { instagram_actor_id: igActorId, approved_ig_accounts: client.allowedIgActorIds, ad_name: ad.name },
+        whyItMatters: "Ads running under an Instagram account not associated with this ad account misrepresent the brand identity.",
+        recommendedFix: accountIgIds.length > 0
+          ? `Update the ad to use one of the Instagram accounts connected to this ad account: ${accountIgNames.join(", ") || accountIgIds.join(", ")}.`
+          : `Update the ad to use an approved Instagram account ID: ${allowedIgIds.join(", ")}.`,
+        description: `Instagram account ${igActorId} is not associated with this ad account.`,
+        evidence: { instagram_actor_id: igActorId, ad_name: ad.name, account_ig_accounts: accountIgNames.length > 0 ? accountIgNames : accountIgIds },
         adId: ad.id,
         adsetId: ad.adset_id,
         campaignId: ad.campaign_id,
