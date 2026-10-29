@@ -1,11 +1,12 @@
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
-  clients, metaCredentials, adAccounts, scanIssues,
+  clients, metaCredentials, adAccounts, scanIssues, users, sessions,
   type Client, type InsertClient,
   type Credential, type InsertCredential,
   type AdAccount, type InsertAdAccount,
   type ScanIssue, type InsertScanIssue,
+  type User, type InsertUser,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -48,6 +49,15 @@ export interface IStorage {
   deleteIssuesByAdAccount(adAccountId: number): Promise<void>;
   bulkUpdateIssues(ids: number[], data: Partial<InsertScanIssue>): Promise<number>;
   bulkUpdateIssuesByRule(ruleId: string, adAccountId: number, currentStatus: string, newStatus: string): Promise<number>;
+
+  getUsers(): Promise<User[]>;
+  getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByResetTokenHash(hash: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined>;
+  deleteUser(id: string): Promise<void>;
+  deleteSessionsForUser(userId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -193,6 +203,43 @@ export class DatabaseStorage implements IStorage {
     }
     const result = await db.update(scanIssues).set({ status: newStatus as any }).where(and(...conditions)).returning();
     return result.length;
+  }
+
+  async getUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(asc(users.createdAt));
+  }
+
+  async getUser(id: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
+  async getUserByResetTokenHash(hash: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.resetTokenHash, hash));
+    return user;
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    const [created] = await db.insert(users).values(user).returning();
+    return created;
+  }
+
+  async updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined> {
+    const [updated] = await db.update(users).set(data).where(eq(users.id, id)).returning();
+    return updated;
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    await db.delete(users).where(eq(users.id, id));
+  }
+
+  async deleteSessionsForUser(userId: string): Promise<void> {
+    await db.delete(sessions).where(sql`${sessions.sess}->>'userId' = ${userId}`);
   }
 }
 

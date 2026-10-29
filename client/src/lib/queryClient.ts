@@ -2,8 +2,16 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
+    // The session ended; clearing the cached user shows the login screen.
+    if (res.status === 401) queryClient.setQueryData(["/api/auth/user"], { user: null });
+
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    let message = `${res.status}: ${text}`;
+    try {
+      const body = JSON.parse(text);
+      if (typeof body?.message === "string") message = body.message;
+    } catch {}
+    throw new Error(message);
   }
 }
 

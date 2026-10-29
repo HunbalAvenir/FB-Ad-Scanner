@@ -1,11 +1,15 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import connectPg from "connect-pg-simple";
+import { pool } from "./db";
+import { registerAuthRoutes, ensureAuthTables, ensureSuperAdmins } from "./auth";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
 declare module "express-session" {
   interface SessionData {
+    userId?: string;
     metaUserToken?: string;
     metaUserName?: string;
     oauthState?: string;
@@ -33,7 +37,10 @@ app.use(express.urlencoded({ extended: false }));
 
 app.set("trust proxy", 1);
 
+const PgSessionStore = connectPg(session);
+
 app.use(session({
+  store: new PgSessionStore({ pool, tableName: "sessions" }),
   secret: process.env.SESSION_SECRET || "dev-secret",
   resave: false,
   saveUninitialized: false,
@@ -41,7 +48,7 @@ app.use(session({
     secure: process.env.NODE_ENV === "production",
     httpOnly: true,
     sameSite: "lax",
-    maxAge: 1000 * 60 * 60 * 4,
+    maxAge: 1000 * 60 * 60 * 24 * 7,
   },
 }));
 
@@ -85,6 +92,9 @@ app.use((req, res, next) => {
 (async () => {
   const { seedDatabase } = await import("./seed");
   await seedDatabase();
+  await ensureAuthTables();
+  await ensureSuperAdmins();
+  registerAuthRoutes(app);
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
