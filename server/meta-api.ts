@@ -5,6 +5,7 @@ export interface MetaApiError {
   type: string;
   code: number;
   error_subcode?: number;
+  is_transient?: boolean;
   fbtrace_id?: string;
 }
 
@@ -14,14 +15,21 @@ export interface MetaApiResponse<T> {
   paging?: { cursors: { before: string; after: string }; next?: string };
 }
 
-async function metaFetch<T>(path: string, token: string, params: Record<string, string> = {}): Promise<MetaApiResponse<T>> {
+function metaUrl(path: string, token: string, params: Record<string, string>): string {
   const url = new URL(`${META_GRAPH_URL}${path}`);
   url.searchParams.set("access_token", token);
   for (const [key, val] of Object.entries(params)) {
     url.searchParams.set(key, val);
   }
+  return url.toString();
+}
 
-  const res = await fetch(url.toString());
+async function metaFetch<T>(path: string, token: string, params: Record<string, string> = {}): Promise<MetaApiResponse<T>> {
+  return metaRequest<T>(metaUrl(path, token, params));
+}
+
+async function metaRequest<T>(url: string): Promise<MetaApiResponse<T>> {
+  const res = await fetch(url);
   const json = await res.json() as any;
 
   if (json.error) {
@@ -33,6 +41,31 @@ async function metaFetch<T>(path: string, token: string, params: Record<string, 
   }
 
   return { data: json };
+}
+
+// Large accounts regularly get "An unexpected error has occurred. Please retry
+// your request later." on some page; retrying that page usually succeeds.
+async function metaRequestWithRetry<T>(url: string, retries = 2): Promise<MetaApiResponse<T>> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await metaRequest<T>(url);
+    const transient = res.error && (res.error.is_transient || res.error.code === 1 || res.error.code === 2);
+    if (!transient || attempt >= retries) return res;
+    await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+  }
+}
+
+// Follows paging.next until every page is fetched. If a page still fails after
+// retries, returns the items fetched so far along with the error.
+async function metaFetchAll<T>(path: string, token: string, params: Record<string, string> = {}): Promise<{ data: T[]; error?: string }> {
+  const all: T[] = [];
+  let res = await metaRequestWithRetry<T[]>(metaUrl(path, token, params));
+
+  while (true) {
+    if (res.error) return { data: all, error: res.error.message };
+    if (Array.isArray(res.data)) all.push(...res.data);
+    if (!res.paging?.next) return { data: all };
+    res = await metaRequestWithRetry<T[]>(res.paging.next);
+  }
 }
 
 export async function validateToken(token: string): Promise<{
@@ -74,33 +107,12 @@ export interface MetaAdAccountInfo {
   timezone_name?: string;
 }
 
-async function paginateAccounts(token: string, initialPath: string): Promise<{ accounts: MetaAdAccountInfo[]; error?: string }> {
-  const allAccounts: MetaAdAccountInfo[] = [];
-  let path = initialPath;
-  const params: Record<string, string> = {
+async function paginateAccounts(token: string, path: string): Promise<{ accounts: MetaAdAccountInfo[]; error?: string }> {
+  const res = await metaFetchAll<MetaAdAccountInfo>(path, token, {
     fields: "name,account_status,business_name,currency,timezone_name",
     limit: "200",
-  };
-
-  while (true) {
-    const res = await metaFetch<MetaAdAccountInfo[]>(path, token, params);
-    if (res.error) {
-      return { accounts: allAccounts, error: res.error.message };
-    }
-    if (Array.isArray(res.data)) {
-      allAccounts.push(...res.data);
-    }
-    if (res.paging?.next) {
-      const nextUrl = new URL(res.paging.next);
-      path = nextUrl.pathname.replace("/v21.0", "");
-      params.after = nextUrl.searchParams.get("after") || "";
-      delete params.limit;
-    } else {
-      break;
-    }
-  }
-
-  return { accounts: allAccounts };
+  });
+  return { accounts: res.data, error: res.error };
 }
 
 export async function listAdAccounts(token: string): Promise<{ accounts?: MetaAdAccountInfo[]; error?: string }> {
@@ -203,13 +215,12 @@ export async function getAds(accountId: string, token: string, limit = 100): Pro
   error?: string;
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-  const res = await metaFetch<MetaAd[]>(`/${actId}/ads`, token, {
+  const res = await metaFetchAll<MetaAd>(`/${actId}/ads`, token, {
     fields: "id,name,status,effective_status,creative{id,object_story_spec,asset_feed_spec,degrees_of_freedom_spec,image_url,image_hash,thumbnail_url,video_id,call_to_action_type,link_url,instagram_actor_id,object_type,effective_object_story_id,url_tags},adset_id,campaign_id,tracking_specs,preview_shareable_link",
     limit: String(limit),
   });
 
-  if (res.error) return { error: res.error.message };
-  return { ads: res.data as MetaAd[] };
+  return { ads: res.data, error: res.error };
 }
 
 export interface MetaAdSetTargeting {
@@ -239,13 +250,12 @@ export async function getAdSets(accountId: string, token: string, limit = 100): 
   error?: string;
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-  const res = await metaFetch<MetaAdSet[]>(`/${actId}/adsets`, token, {
+  const res = await metaFetchAll<MetaAdSet>(`/${actId}/adsets`, token, {
     fields: "id,name,status,effective_status,targeting{publisher_platforms,facebook_positions,instagram_positions,device_platforms},optimization_goal,billing_event,bid_strategy,daily_budget,lifetime_budget,promoted_object",
     limit: String(limit),
   });
 
-  if (res.error) return { error: res.error.message };
-  return { adsets: res.data as MetaAdSet[] };
+  return { adsets: res.data, error: res.error };
 }
 
 export interface MetaCreative {
@@ -266,13 +276,12 @@ export async function getAdCreatives(accountId: string, token: string, limit = 1
   error?: string;
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-  const res = await metaFetch<MetaCreative[]>(`/${actId}/adcreatives`, token, {
+  const res = await metaFetchAll<MetaCreative>(`/${actId}/adcreatives`, token, {
     fields: "id,name,title,body,image_url,thumbnail_url,object_story_spec,asset_feed_spec,url_tags,effective_object_story_id",
     limit: String(limit),
   });
 
-  if (res.error) return { error: res.error.message };
-  return { creatives: res.data as MetaCreative[] };
+  return { creatives: res.data, error: res.error };
 }
 
 export interface MetaCampaign {
@@ -291,13 +300,12 @@ export async function getCampaigns(accountId: string, token: string, limit = 100
   error?: string;
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-  const res = await metaFetch<MetaCampaign[]>(`/${actId}/campaigns`, token, {
+  const res = await metaFetchAll<MetaCampaign>(`/${actId}/campaigns`, token, {
     fields: "id,name,status,effective_status,objective,daily_budget,lifetime_budget,special_ad_categories",
     limit: String(limit),
   });
 
-  if (res.error) return { error: res.error.message };
-  return { campaigns: res.data as MetaCampaign[] };
+  return { campaigns: res.data, error: res.error };
 }
 
 export async function getAccountPages(accountId: string, token: string): Promise<{
@@ -305,12 +313,12 @@ export async function getAccountPages(accountId: string, token: string): Promise
   error?: string;
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-  const res = await metaFetch<any[]>(`/${actId}/promote_pages`, token, {
+  const res = await metaFetchAll<{ id: string; name: string }>(`/${actId}/promote_pages`, token, {
     fields: "id,name",
+    limit: "100",
   });
 
-  if (res.error) return { error: res.error.message };
-  return { pages: res.data as Array<{ id: string; name: string }> };
+  return { pages: res.data, error: res.error };
 }
 
 export async function getAccountInstagramAccounts(accountId: string, token: string): Promise<{
@@ -318,12 +326,12 @@ export async function getAccountInstagramAccounts(accountId: string, token: stri
   error?: string;
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-  const res = await metaFetch<any[]>(`/${actId}/instagram_accounts`, token, {
+  const res = await metaFetchAll<{ id: string; username?: string; name?: string }>(`/${actId}/instagram_accounts`, token, {
     fields: "id,username,name",
+    limit: "100",
   });
 
-  if (res.error) return { error: res.error.message };
-  return { igAccounts: res.data as Array<{ id: string; username?: string; name?: string }> };
+  return { igAccounts: res.data, error: res.error };
 }
 
 export interface ImageMetadata {

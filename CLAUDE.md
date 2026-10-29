@@ -33,7 +33,7 @@ Auth (`server/auth.ts`) mirrors the sibling Audit-Wizard (AdIQ) tool: email + pa
 Server layers:
 - `server/routes.ts`: all other `/api/*` routes, thin handlers over `storage`. The passport dependencies are unused.
 - `server/storage.ts`: the `IStorage` interface implemented by `DatabaseStorage` (Drizzle). All DB access goes through `storage`.
-- `server/meta-api.ts`: Graph API fetch helpers (`metaFetch`, `smokeTestAdAccount`, `getAds`/`getAdSets`/`getCampaigns`, pages/IG accounts). It also contains `getImageMetadata`, which downloads a creative image and reads the pixel size from the PNG/JPEG header bytes. Only `listAdAccounts` follows paging. The other fetches return just the first page (limit 100).
+- `server/meta-api.ts`: Graph API fetch helpers (`metaFetch`, `smokeTestAdAccount`, `getAds`/`getAdSets`/`getCampaigns`, pages/IG accounts). It also contains `getImageMetadata`, which downloads a creative image and reads the pixel size from the PNG/JPEG header bytes. All list fetches go through `metaFetchAll`, which follows `paging.next` and retries Meta's transient errors. If a page still fails, it returns what it fetched so far together with `error`, so callers get partial data. Big accounts have thousands of ads (4,500+ seen).
 - `server/scanner.ts`: the rule engine.
 
 Scan pipeline (`scanAdAccount`):
