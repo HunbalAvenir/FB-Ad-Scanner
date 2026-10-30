@@ -11,12 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Plus, Radio, Shield, AlertTriangle, AlertOctagon, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw, Filter, X, Info, Pencil, Search, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Plus, Radio, Shield, SlidersHorizontal, AlertTriangle, AlertOctagon, CheckCircle2, FileText, Download, Scan, Loader2, ExternalLink, Eye, Link2, Globe, RotateCcw, Filter, X, Info, Pencil, Search, ChevronDown, ChevronRight } from "lucide-react";
 import { useState, useMemo } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Client, AdAccount, Credential, ScanIssue } from "@shared/schema";
 import { ruleLabel, typeLabel, objectiveLabel } from "@/lib/labels";
+import { ClientRulesTab } from "@/components/client-rules";
 
 export default function ClientDetailPage() {
   const [, params] = useRoute("/clients/:id");
@@ -206,6 +207,9 @@ export default function ClientDetailPage() {
           <TabsTrigger value="issues" data-testid="tab-issues">
             <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Issues {hasActiveIssueFilters ? `(${filteredOpen.length + filteredAcknowledged.length + filteredClosed.length}/${clientIssues.length})` : `(${clientIssues.length})`}
           </TabsTrigger>
+          <TabsTrigger value="rules" data-testid="tab-rules">
+            <SlidersHorizontal className="h-3.5 w-3.5 mr-1" /> Rules
+          </TabsTrigger>
           <TabsTrigger value="onboarding" data-testid="tab-onboarding">
             <FileText className="h-3.5 w-3.5 mr-1" /> Onboarding
           </TabsTrigger>
@@ -380,6 +384,10 @@ export default function ClientDetailPage() {
               </Tabs>
             </>
           )}
+        </TabsContent>
+
+        <TabsContent value="rules" className="mt-4">
+          <ClientRulesTab key={client.id} client={client} />
         </TabsContent>
 
         <TabsContent value="onboarding" className="mt-4 space-y-4">

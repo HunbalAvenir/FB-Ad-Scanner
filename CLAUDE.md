@@ -26,7 +26,7 @@ Env vars: `DATABASE_URL` (required, the server throws at import without it), `ME
 
 One Express process (`server/index.ts`) serves both the REST API and the React client on one port. In development, Vite runs as middleware (`server/vite.ts`). In production, built static files are served (`server/static.ts`). Startup order: `seedDatabase()` → `registerRoutes()` → Vite/static → listen. The seed (`server/seed.ts`) inserts 5 demo clients with fake account IDs whenever the `clients` table is empty, so a fresh DB always shows demo data, and scanning those accounts fails with access errors.
 
-Schema changes go in `shared/schema.ts` (Drizzle tables plus `drizzle-zod` insert schemas, which the routes use for validation) and are applied with `db:push`. There are no migration files. Tables reference each other only through integer columns, with no foreign keys or cascades, so deletes don't cascade.
+Schema changes go in `shared/schema.ts` (Drizzle tables plus `drizzle-zod` insert schemas, which the routes use for validation) and are applied with `db:push`. Deploys don't run `db:push`, so any change an existing database needs (new defaults, data fixes) also goes in `server/migrations.ts` as a one-off that runs once at startup and is recorded in `app_migrations`. Tables reference each other only through integer columns, with no foreign keys or cascades, so deletes don't cascade.
 
 Auth (`server/auth.ts`) mirrors the sibling Audit-Wizard (AdIQ) tool: email + password (scrypt), roles `super_admin` / `user`, no public sign-up. `SUPER_ADMIN_EMAILS` are recreated as super admins on every startup. Invites and password resets share one flow: a sha256-hashed one-time token on the user row, landing on `/reset-password?token=`. Emails go through Resend (`server/email.ts`). Without email configured, admins set a temporary password or copy an invite link instead. Sessions are express-session stored in the Postgres `sessions` table (connect-pg-simple), with `userId` in the session. `ensureAuthTables()` creates `users`/`sessions` with raw SQL at startup (deploys don't run `db:push`), so if you change those two tables in `shared/schema.ts`, update that SQL to match and check that `db:push` reports no changes. The same session also holds the Facebook OAuth user token used for importing accounts. `registerAuthRoutes()` registers the public `/api/auth/*` routes and then `app.use("/api", requireAuth)`, so every route registered after it (everything in `routes.ts`) requires sign-in, and `/api/users` additionally requires a super admin. On the client, `AuthGate` in `App.tsx` shows the login screen when `/api/auth/user` returns no user, and any 401 clears that cached user.
 
@@ -45,6 +45,13 @@ Scan pipeline (`scanAdAccount`):
 6. `storage.deleteIssuesByAdAccount()` wipes **all** issues for the account, including resolved and dismissed ones, then the findings are batch-inserted with `status: "open"`, `routeTo: "buyer"`.
 
 Scans run one account per request. The dashboard's "Scan All" and the client page both loop over `POST /api/scan/account/:id` and show progress, because one request covering every account times out. `/api/scan/all` still exists but the UI no longer uses it.
+
+Per-client rules live on the client's **Rules** tab (`client/src/components/client-rules.tsx`):
+- the UTM check switch (`requiredUtm`, on by default)
+- the approved domains, page IDs and Instagram IDs, which "Fill from current ads" pre-fills via `GET /api/clients/:id/identity-suggestions` (`suggestClientIdentity`), because Meta exposes no reliable list of a client's own pages or Instagram accounts
+- the allowed AI features (`allowedAiEnhancements`)
+
+AI features are flagged unless the client allows them. Their keys and labels are in `shared/ai-features.ts`, and an allowed key is skipped by every AI rule. AI_005 is retired. ASPECT_003 only fires when ASPECT_001/002 haven't already flagged the ad.
 
 Adding a rule: push a `Finding` from the matching `check*` function, using a new rule ID in the existing `AI_` / `ASPECT_` / `CREATIVE_` / `TRACK_` / `ACCESS_` families. The `issueType` must be one of the enum values in `scanIssues`. Client policy fields (`allowedDomains`, `allowedPageIds`, `allowedIgActorIds`, `allowedAiEnhancements`, `requiredUtm`) on the `Client` are what make rules client-specific. Update the rule list in `replit.md` too, since that file documents the rule catalogue.
 

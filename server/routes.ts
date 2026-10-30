@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { storage } from "./storage";
 import { insertClientSchema, insertCredentialSchema, insertAdAccountSchema, insertScanIssueSchema } from "@shared/schema";
 import { z } from "zod";
-import { scanAllAccounts, scanSingleAccount, auditAccountUrls } from "./scanner";
+import { scanAllAccounts, scanSingleAccount, auditAccountUrls, suggestClientIdentity } from "./scanner";
 import { validateToken, smokeTestAdAccount, listAdAccounts } from "./meta-api";
 
 function getBaseUrl(req: any): string {
@@ -111,6 +111,12 @@ export async function registerRoutes(
     const updated = await storage.updateClient(Number(req.params.id), req.body);
     if (!updated) return res.status(404).json({ message: "Client not found" });
     res.json(updated);
+  });
+
+  app.get("/api/clients/:id/identity-suggestions", async (req, res) => {
+    const client = await storage.getClient(Number(req.params.id));
+    if (!client) return res.status(404).json({ message: "Client not found" });
+    res.json(await suggestClientIdentity(client.id));
   });
 
   app.delete("/api/clients/:id", async (req, res) => {

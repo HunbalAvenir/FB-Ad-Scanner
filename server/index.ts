@@ -3,6 +3,7 @@ import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
 import { registerAuthRoutes, ensureAuthTables, ensureSuperAdmins } from "./auth";
+import { runMigrations } from "./migrations";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -93,6 +94,7 @@ app.use((req, res, next) => {
   const { seedDatabase } = await import("./seed");
   await seedDatabase();
   await ensureAuthTables();
+  await runMigrations();
   await ensureSuperAdmins();
   registerAuthRoutes(app);
   await registerRoutes(httpServer, app);

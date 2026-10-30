@@ -14,7 +14,7 @@ export const clients = pgTable("clients", {
   allowedDomains: text("allowed_domains").array(),
   utmTemplateId: text("utm_template_id"),
   allowedAiEnhancements: text("allowed_ai_enhancements").array(),
-  requiredUtm: boolean("required_utm").default(false),
+  requiredUtm: boolean("required_utm").default(true),
   allowedAspectRatios: jsonb("allowed_aspect_ratios"),
   status: text("status", { enum: ["active", "onboarding", "paused", "degraded"] }).notNull().default("onboarding"),
   notes: text("notes"),
@@ -89,6 +89,12 @@ export const scanIssues = pgTable("scan_issues", {
 export const insertScanIssueSchema = createInsertSchema(scanIssues).omit({ id: true, createdAt: true });
 export type InsertScanIssue = z.infer<typeof insertScanIssueSchema>;
 export type ScanIssue = typeof scanIssues.$inferSelect;
+
+// One-off migrations already applied by server/migrations.ts.
+export const appMigrations = pgTable("app_migrations", {
+  id: varchar("id").primaryKey(),
+  appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const sessions = pgTable(
   "sessions",

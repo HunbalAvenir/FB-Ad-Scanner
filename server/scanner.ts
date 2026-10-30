@@ -15,6 +15,7 @@ import {
   type MetaCampaign,
 } from "./meta-api";
 import type { AdAccount, Credential, Client, InsertScanIssue } from "@shared/schema";
+import { aiFeatureLabel } from "@shared/ai-features";
 import { log } from "./index";
 
 interface ScanResult {
@@ -320,6 +321,8 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
   const findings: Finding[] = [];
   const spec = creative.object_story_spec;
   const feedSpec = creative.asset_feed_spec;
+  // Features this client is fine with are never flagged.
+  const allowed = new Set(client.allowedAiEnhancements ?? []);
 
   interface Enhancement {
     key: string;
@@ -332,104 +335,66 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
   const enhancements: Enhancement[] = [];
 
   const advantageDetails: string[] = [];
+  const addDetail = (key: string, label = aiFeatureLabel(key)) => {
+    if (!allowed.has(key)) advantageDetails.push(label);
+  };
   if (spec) {
-    if (spec.link_data?.image_crops) advantageDetails.push("Image cropping");
-    if (spec.link_data?.multi_share_optimized) advantageDetails.push("Multi-share optimization");
+    if (spec.link_data?.image_crops) addDetail("image_crops");
+    if (spec.link_data?.multi_share_optimized) addDetail("multi_share_optimized");
   }
-  if (feedSpec) {
-    if (feedSpec.ad_formats) advantageDetails.push(`Dynamic formats (${Array.isArray(feedSpec.ad_formats) ? feedSpec.ad_formats.join(", ") : feedSpec.ad_formats})`);
+  if (feedSpec?.ad_formats) {
+    addDetail("dynamic_formats", `${aiFeatureLabel("dynamic_formats")} (${Array.isArray(feedSpec.ad_formats) ? feedSpec.ad_formats.join(", ") : feedSpec.ad_formats})`);
   }
 
   const dofSpec = feedSpec?.degrees_of_freedom_spec || creative.degrees_of_freedom_spec;
-  if (dofSpec) {
-    const creativeFeaturesSpec = dofSpec?.creative_features_spec;
-    if (creativeFeaturesSpec) {
-      const featureLabels: Record<string, string> = {
-        image_background_gen: "AI Background Generation",
-        image_uncrop: "Image Uncrop/Expand",
-        image_auto_crop: "Auto Crop",
-        image_templates: "Image Templates",
-        image_touchup: "Image Touchup",
-        image_touchups: "Image Touchups",
-        text_optimizations: "Text Optimizations",
-        image_brightness_and_contrast: "Brightness/Contrast",
-        adapt_to_placement: "Adapt to Placement",
-        media_liquidity: "Media Liquidity",
-        site_extensions: "Site Extensions",
-        text_generation: "AI Text Generation",
-        describe_your_product: "Product Description",
-        inline_comment: "Inline Comment",
-        standard_enhancements: "Standard Enhancements",
-        vc_rewrite: "Visual Copy Rewrite",
-        image_enhancement: "Image Enhancement",
-        carousel_to_video: "Carousel to Video",
-        cv_transformation: "Carousel/Video Transformation",
-        description_automation: "Description Automation",
-        enhance_cta: "Enhanced CTA",
-        image_animation: "Image Animation",
-        pac_relaxation: "Placement Asset Customization",
-        replace_media_text: "Replace Media Text",
-        reveal_details_over_time: "Reveal Details Over Time",
-        show_summary: "Show Summary",
-        video_auto_crop: "Video Auto Crop",
-        video_filtering: "Video Filtering",
-        video_uncrop: "Video Uncrop/Expand",
-        advantage_plus_creative: "Advantage+ Creative",
-        text_translation: "Text Translation",
-      };
-      for (const [feature, config] of Object.entries(creativeFeaturesSpec)) {
-        const cfg = config as any;
-        if (cfg?.enroll_status === "OPT_IN" || cfg?.transformation_type) {
-          advantageDetails.push(featureLabels[feature] || feature.replace(/_/g, " "));
-        }
-      }
-    }
+  const dofFeatures: Record<string, any> = dofSpec?.creative_features_spec || {};
+  const isOn = (key: string) => {
+    const cfg = dofFeatures[key];
+    return !allowed.has(key) && (cfg?.enroll_status === "OPT_IN" || !!cfg?.transformation_type);
+  };
+
+  for (const feature of Object.keys(dofFeatures)) {
+    if (isOn(feature)) advantageDetails.push(aiFeatureLabel(feature));
   }
 
   if (advantageDetails.length > 0) {
     enhancements.push({ key: "advantage_creative", ruleId: "AI_001", label: "Advantage creative enhancements", severity: "high", details: advantageDetails });
   }
 
-  const dofFeatures = dofSpec?.creative_features_spec || {};
-
-  const disallowedFeatures: Array<{ key: string; label: string; ruleId: string }> = [
-    { key: "text_optimizations", label: "Text Improvements", ruleId: "AI_006" },
-    { key: "description_automation", label: "Text Improvements (Description)", ruleId: "AI_006" },
-    { key: "media_liquidity", label: "Flex Media", ruleId: "AI_007" },
-    { key: "pac_relaxation", label: "Flex Media (Placement Relaxation)", ruleId: "AI_007" },
-    { key: "describe_your_product", label: "Product Tags", ruleId: "AI_008" },
+  const disallowedFeatures: Array<{ key: string; ruleId: string }> = [
+    { key: "text_optimizations", ruleId: "AI_006" },
+    { key: "description_automation", ruleId: "AI_006" },
+    { key: "media_liquidity", ruleId: "AI_007" },
+    { key: "pac_relaxation", ruleId: "AI_007" },
+    { key: "describe_your_product", ruleId: "AI_008" },
   ];
+  const ruleLabels: Record<string, string> = {
+    AI_006: "Text Improvements",
+    AI_007: "Flex Media",
+    AI_008: "Product Tags",
+  };
 
   const seenDisallowedRules = new Set<string>();
   for (const feat of disallowedFeatures) {
-    const cfg = dofFeatures[feat.key] as any;
-    if (cfg?.enroll_status === "OPT_IN" || cfg?.transformation_type) {
-      if (seenDisallowedRules.has(feat.ruleId)) continue;
-      seenDisallowedRules.add(feat.ruleId);
-      const ruleLabels: Record<string, string> = {
-        AI_006: "Text Improvements",
-        AI_007: "Flex Media",
-        AI_008: "Product Tags",
-      };
-      findings.push({
-        ruleId: feat.ruleId,
-        severity: "high",
-        category: "AI_TOGGLE",
-        issueType: "ai_toggle",
-        message: `${ruleLabels[feat.ruleId]} enabled on ad "${ad.name}"`,
-        whyItMatters: `${ruleLabels[feat.ruleId]} must be turned off. This feature allows Meta to automatically modify your ad content which can misrepresent the brand.`,
-        recommendedFix: `Disable ${ruleLabels[feat.ruleId]!.toLowerCase()} in the ad's Advantage Creative settings.`,
-        description: `${ruleLabels[feat.ruleId]} is enabled and must be turned off.`,
-        evidence: { feature: feat.key, feature_label: feat.label, ad_name: ad.name },
-        adId: ad.id,
-        adsetId: ad.adset_id,
-        campaignId: ad.campaign_id,
-      });
-    }
+    if (!isOn(feat.key) || seenDisallowedRules.has(feat.ruleId)) continue;
+    seenDisallowedRules.add(feat.ruleId);
+    findings.push({
+      ruleId: feat.ruleId,
+      severity: "high",
+      category: "AI_TOGGLE",
+      issueType: "ai_toggle",
+      message: `${ruleLabels[feat.ruleId]} enabled on ad "${ad.name}"`,
+      whyItMatters: `${ruleLabels[feat.ruleId]} must be turned off. This feature allows Meta to automatically modify your ad content which can misrepresent the brand.`,
+      recommendedFix: `Disable ${ruleLabels[feat.ruleId]!.toLowerCase()} in the ad's Advantage Creative settings, or allow it for this client in the Rules tab.`,
+      description: `${ruleLabels[feat.ruleId]} is enabled and must be turned off.`,
+      evidence: { feature: feat.key, feature_label: aiFeatureLabel(feat.key), ad_name: ad.name },
+      adId: ad.id,
+      adsetId: ad.adset_id,
+      campaignId: ad.campaign_id,
+    });
   }
 
-  const siteExtCfg = dofFeatures.site_extensions as any;
-  if (siteExtCfg?.enroll_status === "OPT_IN" || siteExtCfg?.transformation_type) {
+  if (isOn("site_extensions")) {
     findings.push({
       ruleId: "AI_009",
       severity: "high",
@@ -437,7 +402,7 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
       issueType: "ai_toggle",
       message: `Sitelinks enabled on ad "${ad.name}"`,
       whyItMatters: "Sitelinks must be turned off. Meta auto-generates additional links that may direct users to unintended pages.",
-      recommendedFix: "Disable sitelinks in the ad's creative setup section.",
+      recommendedFix: "Disable sitelinks in the ad's creative setup section, or allow them for this client in the Rules tab.",
       description: "Sitelinks are enabled and must be turned off.",
       evidence: { feature: "site_extensions", ad_name: ad.name },
       adId: ad.id,
@@ -449,7 +414,7 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
   const hasProducts = (feedSpec?.shops_bundle && Object.keys(feedSpec.shops_bundle).length > 0)
     || (feedSpec?.product_set_id)
     || (Array.isArray(feedSpec?.retailer_item_ids) && feedSpec.retailer_item_ids.length > 0);
-  if (hasProducts) {
+  if (hasProducts && !allowed.has("products_association")) {
     findings.push({
       ruleId: "AI_010",
       severity: "high",
@@ -457,7 +422,7 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
       issueType: "ai_toggle",
       message: `Products associated with ad "${ad.name}"`,
       whyItMatters: "Products must not be associated with the ad. Product catalog associations can cause Meta to modify the ad with product-specific content.",
-      recommendedFix: "Remove the products association from the ad's creative setup section.",
+      recommendedFix: "Remove the products association from the ad's creative setup section, or allow it for this client in the Rules tab.",
       description: "Products are associated with this ad and must be removed.",
       evidence: { feature: "products_association", ad_name: ad.name },
       adId: ad.id,
@@ -489,12 +454,9 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
     }
   }
 
-  const seenRules = new Set<string>();
+  // AI_002-004 can be allowed per client by their enhancement key.
   for (const enh of enhancements) {
-    if (seenRules.has(enh.ruleId)) continue;
-    seenRules.add(enh.ruleId);
-
-    const detailStr = enh.details.join(", ");
+    if (allowed.has(enh.key)) continue;
     findings.push({
       ruleId: enh.ruleId,
       severity: enh.severity,
@@ -502,34 +464,13 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
       issueType: "ai_toggle",
       message: `${enh.label} enabled on ad "${ad.name}"`,
       whyItMatters: "AI-modified creatives can alter your approved assets in unexpected ways, potentially misrepresenting the brand or product.",
-      recommendedFix: `Disable ${enh.label.toLowerCase()} in ad settings or add "${enh.key}" to the client's allowed enhancements list.`,
+      recommendedFix: `Disable ${enh.label.toLowerCase()} in ad settings, or allow these features for this client in the Rules tab.`,
       evidence: { enhancement_type: enh.key, active_features: enh.details, ad_name: ad.name },
-      description: `Active AI features: ${detailStr}`,
+      description: `Active AI features: ${enh.details.join(", ")}`,
       adId: ad.id,
       adsetId: ad.adset_id,
       campaignId: ad.campaign_id,
     });
-
-    if (client.allowedAiEnhancements && !client.allowedAiEnhancements.includes(enh.key)) {
-      findings.push({
-        ruleId: "AI_005",
-        severity: "high",
-        category: "AI_TOGGLE",
-        issueType: "ai_toggle",
-        message: `Enhancement "${enh.label}" not allowed by client policy on ad "${ad.name}"`,
-        whyItMatters: "This enhancement is not in the client's approved list. Using unapproved AI modifications could violate client agreements.",
-        recommendedFix: `Disable ${enh.label.toLowerCase()} or get client approval to add it to allowed enhancements.`,
-        evidence: {
-          enhancement_type: enh.key,
-          active_features: enh.details,
-          allowed_enhancements: client.allowedAiEnhancements || [],
-          ad_name: ad.name,
-        },
-        adId: ad.id,
-        adsetId: ad.adset_id,
-        campaignId: ad.campaign_id,
-      });
-    }
   }
 
   return findings;
@@ -591,7 +532,10 @@ function checkPlacementFit(
   const feedSpec = creative.asset_feed_spec;
   const hasSingleAsset = !feedSpec || !feedSpec.images || feedSpec.images.length <= 1;
 
-  if (hasMultiplePlacementGroups && hasSingleAsset) {
+  // ASPECT_001/002 already describe the misfit for this ad; one issue per ad is enough.
+  const alreadyFlagged = findings.length > 0;
+
+  if (hasMultiplePlacementGroups && hasSingleAsset && !alreadyFlagged) {
     findings.push({
       ruleId: "ASPECT_003",
       severity: "high",
@@ -869,6 +813,25 @@ async function createAccessIssue(adAccount: AdAccount, client: Client, error: st
   });
 }
 
+// The client's first active credential, or a synthetic one for META_SYSTEM_USER_TOKEN
+// (id 0, so callers skip updating it).
+async function getActiveCredential(clientId: number): Promise<Credential | undefined> {
+  const credentials = await storage.getCredentials(clientId);
+  const active = credentials.find(c => c.status === "active");
+  if (active || !process.env.META_SYSTEM_USER_TOKEN) return active;
+  return {
+    id: 0,
+    clientId,
+    credentialType: "system_user_token",
+    tokenOwner: "env_system_user",
+    scopesGranted: ["ads_read", "pages_read_engagement"],
+    status: "active",
+    lastValidatedAt: new Date(),
+    expiresAt: null,
+    createdAt: new Date(),
+  };
+}
+
 export async function scanAllAccounts(): Promise<ScanResult[]> {
   const results: ScanResult[] = [];
   const allClients = await storage.getClients();
@@ -877,23 +840,7 @@ export async function scanAllAccounts(): Promise<ScanResult[]> {
     if (client.status === "paused") continue;
 
     const accounts = await storage.getAdAccounts(client.id);
-    const credentials = await storage.getCredentials(client.id);
-
-    let activeCredential = credentials.find(c => c.status === "active");
-
-    if (!activeCredential && process.env.META_SYSTEM_USER_TOKEN) {
-      activeCredential = {
-        id: 0,
-        clientId: client.id,
-        credentialType: "system_user_token",
-        tokenOwner: "env_system_user",
-        scopesGranted: ["ads_read", "pages_read_engagement"],
-        status: "active",
-        lastValidatedAt: new Date(),
-        expiresAt: null,
-        createdAt: new Date(),
-      } as any;
-    }
+    const activeCredential = await getActiveCredential(client.id);
 
     if (!activeCredential) {
       log(`No active credential for client ${client.name}, skipping`, "scanner");
@@ -950,22 +897,7 @@ export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdU
   const client = await storage.getClient(account.clientId);
   if (!client) throw new Error("Client not found");
 
-  const credentials = await storage.getCredentials(client.id);
-  let activeCredential = credentials.find(c => c.status === "active");
-
-  if (!activeCredential && process.env.META_SYSTEM_USER_TOKEN) {
-    activeCredential = {
-      id: 0,
-      clientId: client.id,
-      credentialType: "system_user_token",
-      tokenOwner: "env_system_user",
-      scopesGranted: ["ads_read", "pages_read_engagement"],
-      status: "active",
-      lastValidatedAt: new Date(),
-      expiresAt: null,
-      createdAt: new Date(),
-    } as any;
-  }
+  const activeCredential = await getActiveCredential(client.id);
 
   if (!activeCredential) {
     return { urls: [], error: "No active credential for this client." };
@@ -1080,22 +1012,7 @@ export async function scanSingleAccount(adAccountId: number): Promise<ScanResult
   const client = await storage.getClient(account.clientId);
   if (!client) throw new Error("Client not found");
 
-  const credentials = await storage.getCredentials(client.id);
-  let activeCredential = credentials.find(c => c.status === "active");
-
-  if (!activeCredential && process.env.META_SYSTEM_USER_TOKEN) {
-    activeCredential = {
-      id: 0,
-      clientId: client.id,
-      credentialType: "system_user_token",
-      tokenOwner: "env_system_user",
-      scopesGranted: ["ads_read", "pages_read_engagement"],
-      status: "active",
-      lastValidatedAt: new Date(),
-      expiresAt: null,
-      createdAt: new Date(),
-    } as any;
-  }
+  const activeCredential = await getActiveCredential(client.id);
 
   // Same handling as scanAllAccounts, so a scan-all loop over accounts can carry on.
   if (!activeCredential) {
@@ -1109,4 +1026,63 @@ export async function scanSingleAccount(adAccountId: number): Promise<ScanResult
   }
 
   return scanAdAccount(account, activeCredential, client);
+}
+
+export interface IdentitySuggestions {
+  domains: Array<{ value: string; ads: number }>;
+  pages: Array<{ value: string; name?: string; ads: number }>;
+  instagram: Array<{ value: string; ads: number }>;
+  error?: string;
+}
+
+// What the client's current ads actually use, for an admin to confirm as the
+// approved website / Facebook page / Instagram lists. Meta has no reliable list of
+// a client's own pages and Instagram accounts, so their ads are the best source.
+export async function suggestClientIdentity(clientId: number): Promise<IdentitySuggestions> {
+  const result: IdentitySuggestions = { domains: [], pages: [], instagram: [] };
+  const credential = await getActiveCredential(clientId);
+  if (!credential) return { ...result, error: "No active credential for this client." };
+  const token = resolveToken(credential);
+
+  const domains = new Map<string, number>();
+  const pages = new Map<string, number>();
+  const instagram = new Map<string, number>();
+  const pageNames = new Map<string, string>();
+  const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1);
+
+  for (const account of await storage.getAdAccounts(clientId)) {
+    const [adsResult, pagesResult] = await Promise.all([
+      getAds(account.accountId, token, SCANNED_STATUSES),
+      getAccountPages(account.accountId, token),
+    ]);
+    if (adsResult.error && !adsResult.ads?.length) result.error = adsResult.error;
+    for (const page of pagesResult.pages ?? []) pageNames.set(page.id, page.name);
+
+    for (const ad of adsResult.ads ?? []) {
+      const creative = ad.creative;
+      if (!creative) continue;
+      const spec = creative.object_story_spec;
+
+      const adDomains = new Set<string>();
+      for (const { url } of getCreativeLinks(creative)) {
+        try {
+          adDomains.add(new URL(url).hostname.replace("www.", ""));
+        } catch {
+        }
+      }
+      adDomains.forEach(domain => bump(domains, domain));
+
+      const pageId = spec?.page_id || creative.effective_object_story_id?.split("_")[0];
+      if (pageId) bump(pages, pageId);
+
+      const igId = creative.instagram_actor_id || spec?.instagram_user_id || spec?.instagram_actor_id;
+      if (igId) bump(instagram, String(igId));
+    }
+  }
+
+  const byUse = (a: { ads: number }, b: { ads: number }) => b.ads - a.ads;
+  result.domains = Array.from(domains, ([value, ads]) => ({ value, ads })).sort(byUse);
+  result.pages = Array.from(pages, ([value, ads]) => ({ value, name: pageNames.get(value), ads })).sort(byUse);
+  result.instagram = Array.from(instagram, ([value, ads]) => ({ value, ads })).sort(byUse);
+  return result;
 }
