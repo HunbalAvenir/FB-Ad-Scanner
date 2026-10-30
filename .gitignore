@@ -5,3 +5,6 @@ server/public
 vite.config.ts.*
 *.tar.gz
 .env
+
+# Local-only demo recording script
+script/demo.mjs
