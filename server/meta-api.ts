@@ -1,5 +1,9 @@
 const META_GRAPH_URL = "https://graph.facebook.com/v21.0";
 
+// A stalled request would otherwise hang a whole scan.
+const META_TIMEOUT_MS = 60_000;
+const IMAGE_TIMEOUT_MS = 15_000;
+
 export interface MetaApiError {
   message: string;
   type: string;
@@ -29,8 +33,14 @@ async function metaFetch<T>(path: string, token: string, params: Record<string, 
 }
 
 async function metaRequest<T>(url: string): Promise<MetaApiResponse<T>> {
-  const res = await fetch(url);
-  const json = await res.json() as any;
+  let json: any;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(META_TIMEOUT_MS) });
+    json = await res.json();
+  } catch (err: any) {
+    // Timeouts and network failures are reported like Meta's own transient errors, so they get retried.
+    return { error: { message: `Meta request failed: ${err?.message ?? err}`, type: "network", code: 2, is_transient: true } };
+  }
 
   if (json.error) {
     return { error: json.error };
@@ -210,15 +220,21 @@ export interface MetaAd {
   preview_shareable_link?: string;
 }
 
-export async function getAds(accountId: string, token: string, limit = 100): Promise<{
+// effectiveStatuses filters on Meta's side. Big accounts hold thousands of archived
+// ads, so fetching only the statuses you need saves most of the time and rate limit.
+export async function getAds(accountId: string, token: string, effectiveStatuses?: string[]): Promise<{
   ads?: MetaAd[];
   error?: string;
 }> {
   const actId = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-  const res = await metaFetchAll<MetaAd>(`/${actId}/ads`, token, {
+  const params: Record<string, string> = {
     fields: "id,name,status,effective_status,creative{id,object_story_spec,asset_feed_spec,degrees_of_freedom_spec,image_url,image_hash,thumbnail_url,video_id,call_to_action_type,link_url,instagram_actor_id,object_type,effective_object_story_id,url_tags},adset_id,campaign_id,tracking_specs,preview_shareable_link",
-    limit: String(limit),
-  });
+    limit: "100",
+  };
+  if (effectiveStatuses) {
+    params.filtering = JSON.stringify([{ field: "effective_status", operator: "IN", value: effectiveStatuses }]);
+  }
+  const res = await metaFetchAll<MetaAd>(`/${actId}/ads`, token, params);
 
   return { ads: res.data, error: res.error };
 }
@@ -342,7 +358,7 @@ export interface ImageMetadata {
 
 export async function getImageMetadata(imageUrl: string): Promise<ImageMetadata | null> {
   try {
-    const res = await fetch(imageUrl, { method: "GET" });
+    const res = await fetch(imageUrl, { method: "GET", signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
     if (!res.ok) return null;
 
     const buffer = Buffer.from(await res.arrayBuffer());

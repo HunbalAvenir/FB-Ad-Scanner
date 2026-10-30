@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,13 +35,34 @@ export default function Dashboard() {
   });
 
   const { toast } = useToast();
+  const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
 
+  // One request per account: a single request for every account takes too long
+  // on big accounts and times out.
   const scanAll = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/scan/all");
-      return res.json();
+      const pausedClientIds = new Set((clients ?? []).filter(c => c.status === "paused").map(c => c.id));
+      const targets = (accounts ?? []).filter(a => !pausedClientIds.has(a.clientId));
+      const results: Array<{ success: boolean; issuesFound: number }> = [];
+      setScanProgress({ done: 0, total: targets.length });
+      for (const account of targets) {
+        try {
+          const res = await apiRequest("POST", `/api/scan/account/${account.id}`);
+          results.push(await res.json());
+        } catch {
+          results.push({ success: false, issuesFound: 0 });
+        }
+        setScanProgress({ done: results.length, total: targets.length });
+      }
+      return {
+        scanned: results.length,
+        successful: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+        totalIssuesFound: results.reduce((sum, r) => sum + (r.issuesFound || 0), 0),
+      };
     },
-    onSuccess: (data: any) => {
+    onSettled: () => setScanProgress(null),
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ad-accounts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/issues"] });
@@ -71,7 +93,7 @@ export default function Dashboard() {
         </div>
         <Button onClick={() => scanAll.mutate()} disabled={scanAll.isPending} data-testid="button-scan-all">
           {scanAll.isPending ? (
-            <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Scanning...</>
+            <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Scanning {scanProgress ? `${Math.min(scanProgress.done + 1, scanProgress.total)} / ${scanProgress.total}` : ""}…</>
           ) : (
             <><Scan className="h-4 w-4 mr-1" /> Scan All Accounts</>
           )}

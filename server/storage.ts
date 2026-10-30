@@ -33,6 +33,7 @@ export interface IStorage {
   getIssues(clientId?: number): Promise<ScanIssue[]>;
   getIssue(id: number): Promise<ScanIssue | undefined>;
   createIssue(issue: InsertScanIssue): Promise<ScanIssue>;
+  createIssues(issues: InsertScanIssue[]): Promise<void>;
   updateIssue(id: number, data: Partial<InsertScanIssue>): Promise<ScanIssue | undefined>;
   deleteIssue(id: number): Promise<void>;
 
@@ -182,6 +183,13 @@ export class DatabaseStorage implements IStorage {
       highIssues: openIssues.filter(i => i.severity === "high").length,
       mediumIssues: openIssues.filter(i => i.severity === "medium").length,
     };
+  }
+
+  async createIssues(issues: InsertScanIssue[]): Promise<void> {
+    // Chunked so a scan with thousands of findings stays under Postgres' parameter limit.
+    for (let i = 0; i < issues.length; i += 500) {
+      await db.insert(scanIssues).values(issues.slice(i, i + 500));
+    }
   }
 
   async deleteIssuesByAdAccount(adAccountId: number): Promise<void> {

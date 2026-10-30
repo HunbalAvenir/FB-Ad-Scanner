@@ -8,6 +8,7 @@ import {
   getAccountPages,
   getAccountInstagramAccounts,
   getImageMetadata,
+  type ImageMetadata,
   type MetaAd,
   type MetaAdSet,
   type MetaAdCreativeDetail,
@@ -43,6 +44,9 @@ interface Finding {
   previewUrl?: string;
   adEffectiveStatus?: string;
 }
+
+// Only these ads are checked; anything else (archived, campaign paused, ...) is skipped.
+const SCANNED_STATUSES = ["ACTIVE", "PAUSED"];
 
 const FEED_PLACEMENTS = ["feed", "facebook_feed", "instagram_feed", "marketplace"];
 const STORY_PLACEMENTS = ["story", "stories", "instagram_stories", "facebook_stories", "reels", "instagram_reels", "facebook_reels"];
@@ -94,6 +98,74 @@ function isSquare(ratio: string): boolean {
   return ratio === "1:1";
 }
 
+// The image whose shape decides placement fit. Video ads use their cover image:
+// creative.thumbnail_url is a 64x64 square crop, so it says nothing about shape.
+function getAssetImage(creative: MetaAdCreativeDetail): { key: string; url: string } | null {
+  const videoData = creative.object_story_spec?.video_data;
+  if (creative.image_url) return { key: creative.image_hash || creative.image_url, url: creative.image_url };
+  if (videoData?.image_url) return { key: videoData.image_hash || videoData.image_url, url: videoData.image_url };
+  const feedVideo = creative.asset_feed_spec?.videos?.find((v: any) => v.thumbnail_url);
+  if (feedVideo) return { key: feedVideo.thumbnail_hash || feedVideo.thumbnail_url, url: feedVideo.thumbnail_url };
+  return null;
+}
+
+const IMAGE_FETCH_CONCURRENCY = 8;
+
+// Downloads each distinct asset image once; many ads in an account share images.
+async function measureAssets(ads: MetaAd[]): Promise<Map<string, ImageMetadata | null>> {
+  const pending = new Map<string, string>();
+  for (const ad of ads) {
+    const image = ad.creative && getAssetImage(ad.creative);
+    if (image && !pending.has(image.key)) pending.set(image.key, image.url);
+  }
+
+  const sizes = new Map<string, ImageMetadata | null>();
+  const queue = Array.from(pending.entries());
+  const worker = async () => {
+    for (let next = queue.shift(); next; next = queue.shift()) {
+      const [key, url] = next;
+      sizes.set(key, await getImageMetadata(url));
+    }
+  };
+  await Promise.all(Array.from({ length: IMAGE_FETCH_CONCURRENCY }, worker));
+  return sizes;
+}
+
+// Every destination URL in a creative. Video ads keep theirs on the CTA button,
+// carousels on each card, and Advantage+ creatives in asset_feed_spec.link_urls.
+function getCreativeLinks(creative: MetaAdCreativeDetail): Array<{ url: string; sourceType: AdUrlEntry["sourceType"] }> {
+  const spec = creative.object_story_spec;
+  const links: Array<{ url: string; sourceType: AdUrlEntry["sourceType"] }> = [];
+
+  if (creative.link_url) links.push({ url: creative.link_url, sourceType: "link_url" });
+  if (spec?.link_data?.link) links.push({ url: spec.link_data.link, sourceType: "link_data" });
+  if (spec?.video_data?.link) links.push({ url: spec.video_data.link, sourceType: "video_data" });
+  if (spec?.video_data?.call_to_action?.value?.link) {
+    links.push({ url: spec.video_data.call_to_action.value.link, sourceType: "video_data" });
+  }
+  for (const child of spec?.link_data?.child_attachments ?? []) {
+    if (child.link) links.push({ url: child.link, sourceType: "carousel" });
+  }
+  for (const linkObj of creative.asset_feed_spec?.link_urls ?? []) {
+    const url = typeof linkObj === "string" ? linkObj : linkObj?.website_url;
+    if (url) links.push({ url, sourceType: "asset_feed" });
+  }
+
+  const seen = new Set<string>();
+  return links.filter(l => !seen.has(l.url) && seen.add(l.url));
+}
+
+// UTMs can be on the URL itself or in the creative's URL parameters (url_tags),
+// which Meta appends to the link when the ad is clicked.
+function hasUtm(url: string, urlTags?: string): boolean {
+  const params = new URLSearchParams(urlTags || "");
+  try {
+    new URL(url).searchParams.forEach((val, key) => params.append(key, val));
+  } catch {
+  }
+  return params.has("utm_source") || params.has("utm_campaign");
+}
+
 export async function scanAdAccount(adAccount: AdAccount, credential: Credential, client: Client): Promise<ScanResult> {
   const token = resolveToken(credential);
 
@@ -136,7 +208,7 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
   log(`Smoke test passed for ${adAccount.accountId}, pulling data...`, "scanner");
 
   const [adsResult, adSetsResult, campaignsResult, pagesResult, igResult] = await Promise.all([
-    getAds(adAccount.accountId, token),
+    getAds(adAccount.accountId, token, SCANNED_STATUSES),
     getAdSets(adAccount.accountId, token),
     getCampaigns(adAccount.accountId, token),
     getAccountPages(adAccount.accountId, token),
@@ -178,7 +250,8 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
     campaignMap.set(campaign.id, campaign);
   }
 
-  const activeAds = ads.filter(a => a.effective_status === "ACTIVE" || a.effective_status === "PAUSED");
+  const activeAds = ads.filter(a => SCANNED_STATUSES.includes(a.effective_status));
+  const assetSizes = await measureAssets(activeAds);
 
   const findings: Finding[] = [];
 
@@ -195,7 +268,8 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
     const aiFindings = checkAiToggles(ad, creative, client);
     findings.push(...aiFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
 
-    const placementFindings = await checkPlacementFit(ad, creative, placements, client);
+    const assetImage = getAssetImage(creative);
+    const placementFindings = checkPlacementFit(ad, creative, placements, assetImage ? assetSizes.get(assetImage.key) : null);
     findings.push(...placementFindings.map(f => ({ ...f, previewUrl: adPreviewUrl, campaignObjective: objective, adEffectiveStatus: adStatus })));
 
     const creativeFindings = checkCreativeIntegrity(ad, creative, client, pages, igAccounts);
@@ -207,32 +281,29 @@ export async function scanAdAccount(adAccount: AdAccount, credential: Credential
 
   await storage.deleteIssuesByAdAccount(adAccount.id);
 
-  let issuesFound = 0;
-  for (const finding of findings) {
-    const issue: InsertScanIssue = {
-      adAccountId: adAccount.id,
-      clientId: client.id,
-      issueType: finding.issueType,
-      severity: finding.severity,
-      message: finding.message,
-      description: finding.description || finding.whyItMatters,
-      ruleId: finding.ruleId,
-      category: finding.category,
-      recommendedFix: finding.recommendedFix,
-      evidence: finding.evidence,
-      whyItMatters: finding.whyItMatters,
-      adId: finding.adId,
-      adsetId: finding.adsetId,
-      campaignId: finding.campaignId,
-      campaignObjective: finding.campaignObjective,
-      previewUrl: finding.previewUrl,
-      adEffectiveStatus: finding.adEffectiveStatus || null,
-      status: "open",
-      routeTo: "buyer",
-    };
-    await storage.createIssue(issue);
-    issuesFound++;
-  }
+  const issues = findings.map((finding): InsertScanIssue => ({
+    adAccountId: adAccount.id,
+    clientId: client.id,
+    issueType: finding.issueType,
+    severity: finding.severity,
+    message: finding.message,
+    description: finding.description || finding.whyItMatters,
+    ruleId: finding.ruleId,
+    category: finding.category,
+    recommendedFix: finding.recommendedFix,
+    evidence: finding.evidence,
+    whyItMatters: finding.whyItMatters,
+    adId: finding.adId,
+    adsetId: finding.adsetId,
+    campaignId: finding.campaignId,
+    campaignObjective: finding.campaignObjective,
+    previewUrl: finding.previewUrl,
+    adEffectiveStatus: finding.adEffectiveStatus || null,
+    status: "open",
+    routeTo: "buyer",
+  }));
+  await storage.createIssues(issues);
+  const issuesFound = issues.length;
 
   log(`Scan complete for ${adAccount.accountId}: ${issuesFound} issues from ${activeAds.length} ads`, "scanner");
 
@@ -464,43 +535,19 @@ function checkAiToggles(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clie
   return findings;
 }
 
-async function checkPlacementFit(
+function checkPlacementFit(
   ad: MetaAd,
   creative: MetaAdCreativeDetail,
   placements: { feed: boolean; story: boolean; all: string[] },
-  client: Client
-): Promise<Finding[]> {
+  asset: ImageMetadata | null | undefined,
+): Finding[] {
   const findings: Finding[] = [];
+  if (!asset) return findings;
 
-  let assetRatio: string | null = null;
-  let assetWidth = 0;
-  let assetHeight = 0;
-
-  if (creative.image_url) {
-    try {
-      const meta = await getImageMetadata(creative.image_url);
-      if (meta) {
-        assetWidth = meta.width;
-        assetHeight = meta.height;
-        assetRatio = meta.aspect_ratio;
-      }
-    } catch {
-    }
-  }
-
-  if (!assetRatio && creative.thumbnail_url) {
-    try {
-      const meta = await getImageMetadata(creative.thumbnail_url);
-      if (meta) {
-        assetWidth = meta.width;
-        assetHeight = meta.height;
-        assetRatio = meta.aspect_ratio;
-      }
-    } catch {
-    }
-  }
-
-  if (!assetRatio) return findings;
+  const assetWidth = asset.width;
+  const assetHeight = asset.height;
+  // Tolerant match, so e.g. a 768x1344 cover still counts as 9:16.
+  const assetRatio = parseAspectRatio(assetWidth, assetHeight);
 
   if (isVertical(assetRatio)) {
     const nonStoryPlacements = placements.all.filter(p => !STORY_PLACEMENTS.includes(p.toLowerCase()));
@@ -616,27 +663,36 @@ function checkCreativeIntegrity(
     }
   }
 
-  const linkUrl = creative.link_url || spec?.link_data?.link || spec?.video_data?.link || "";
-  if (linkUrl && client.allowedDomains && client.allowedDomains.length > 0) {
-    try {
-      const hostname = new URL(linkUrl).hostname.replace("www.", "");
-      const approved = client.allowedDomains.some(d => hostname === d || hostname.endsWith(`.${d}`));
-      if (!approved) {
-        findings.push({
-          ruleId: "CREATIVE_002",
-          severity: "high",
-          category: "CREATIVE_INTEGRITY",
-          issueType: "creative_integrity",
-          message: `Unapproved domain on ad "${ad.name}"`,
-          whyItMatters: "Ads linking to unapproved domains could send traffic to the wrong site or violate client agreements.",
-          recommendedFix: `Update the destination URL to use an approved domain: ${client.allowedDomains.join(", ")}.`,
-          evidence: { link_url: linkUrl, domain: hostname, approved_domains: client.allowedDomains },
-          adId: ad.id,
-          adsetId: ad.adset_id,
-          campaignId: ad.campaign_id,
-        });
+  const allowedDomains = client.allowedDomains ?? [];
+  if (allowedDomains.length > 0) {
+    const unapproved = getCreativeLinks(creative).flatMap(({ url }) => {
+      try {
+        const hostname = new URL(url).hostname.replace("www.", "");
+        const approved = allowedDomains.some(d => hostname === d || hostname.endsWith(`.${d}`));
+        return approved ? [] : [{ url, hostname }];
+      } catch {
+        return [];
       }
-    } catch {
+    });
+    if (unapproved.length > 0) {
+      findings.push({
+        ruleId: "CREATIVE_002",
+        severity: "high",
+        category: "CREATIVE_INTEGRITY",
+        issueType: "creative_integrity",
+        message: `Unapproved domain on ad "${ad.name}"`,
+        whyItMatters: "Ads linking to unapproved domains could send traffic to the wrong site or violate client agreements.",
+        recommendedFix: `Update the destination URL to use an approved domain: ${allowedDomains.join(", ")}.`,
+        evidence: {
+          link_url: unapproved[0].url,
+          domain: unapproved[0].hostname,
+          unapproved_links: unapproved.map(u => u.url),
+          approved_domains: allowedDomains,
+        },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
     }
   }
 
@@ -723,30 +779,29 @@ function checkCreativeIntegrity(
 
 function checkTracking(ad: MetaAd, creative: MetaAdCreativeDetail, client: Client): Finding[] {
   const findings: Finding[] = [];
-  const spec = creative.object_story_spec;
+  const links = getCreativeLinks(creative);
 
-  const linkUrl = creative.link_url || spec?.link_data?.link || spec?.video_data?.link || "";
-
-  if (linkUrl && (client.requiredUtm === true || client.requiredUtm === null)) {
-    try {
-      const url = new URL(linkUrl);
-      const hasUtm = url.searchParams.has("utm_source") || url.searchParams.has("utm_campaign");
-      if (!hasUtm) {
-        findings.push({
-          ruleId: "TRACK_001",
-          severity: "high",
-          category: "TRACKING",
-          issueType: "tracking",
-          message: `Missing UTM parameters on ad "${ad.name}"`,
-          whyItMatters: "Without UTM parameters, you cannot properly attribute traffic and conversions from this ad in analytics.",
-          recommendedFix: "Add utm_source, utm_medium, and utm_campaign parameters to the destination URL.",
-          evidence: { link_url: linkUrl, ad_name: ad.name },
-          adId: ad.id,
-          adsetId: ad.adset_id,
-          campaignId: ad.campaign_id,
-        });
-      }
-    } catch {
+  if (links.length > 0 && (client.requiredUtm === true || client.requiredUtm === null)) {
+    const missingUtm = links.filter(l => !hasUtm(l.url, creative.url_tags));
+    if (missingUtm.length > 0) {
+      findings.push({
+        ruleId: "TRACK_001",
+        severity: "high",
+        category: "TRACKING",
+        issueType: "tracking",
+        message: `Missing UTM parameters on ad "${ad.name}"`,
+        whyItMatters: "Without UTM parameters, you cannot properly attribute traffic and conversions from this ad in analytics.",
+        recommendedFix: "Add utm_source, utm_medium, and utm_campaign to the destination URL or the ad's URL parameters.",
+        evidence: {
+          link_url: missingUtm[0].url,
+          links_missing_utm: missingUtm.map(l => l.url),
+          url_tags: creative.url_tags || null,
+          ad_name: ad.name,
+        },
+        adId: ad.id,
+        adsetId: ad.adset_id,
+        campaignId: ad.campaign_id,
+      });
     }
   }
 
@@ -754,7 +809,7 @@ function checkTracking(ad: MetaAd, creative: MetaAdCreativeDetail, client: Clien
     const hasPixel = ad.tracking_specs.some((spec: any) =>
       spec.fb_pixel || spec.pixel || (spec.action_type && spec.fb_pixel)
     );
-    if (!hasPixel && linkUrl) {
+    if (!hasPixel && links.length > 0) {
       findings.push({
         ruleId: "TRACK_002",
         severity: "high",
@@ -929,29 +984,7 @@ export async function auditAccountUrls(adAccountId: number): Promise<{ urls: AdU
     const creative = ad.creative;
     if (!creative) continue;
 
-    const spec = creative.object_story_spec;
-    const urlSources: Array<{ url: string; sourceType: AdUrlEntry["sourceType"] }> = [];
-
-    if (creative.link_url) {
-      urlSources.push({ url: creative.link_url, sourceType: "link_url" });
-    }
-    if (spec?.link_data?.link) {
-      urlSources.push({ url: spec.link_data.link, sourceType: "link_data" });
-    }
-    if (spec?.video_data?.link) {
-      urlSources.push({ url: spec.video_data.link, sourceType: "video_data" });
-    }
-    if (spec?.link_data?.child_attachments) {
-      for (const child of spec.link_data.child_attachments) {
-        if (child.link) urlSources.push({ url: child.link, sourceType: "carousel" });
-      }
-    }
-    if (creative.asset_feed_spec?.link_urls) {
-      for (const linkObj of creative.asset_feed_spec.link_urls) {
-        const linkUrl = typeof linkObj === "string" ? linkObj : linkObj?.website_url;
-        if (linkUrl) urlSources.push({ url: linkUrl, sourceType: "asset_feed" });
-      }
-    }
+    const urlSources = getCreativeLinks(creative);
 
     if (urlSources.length === 0 && creative.effective_object_story_id) {
       const postId = creative.effective_object_story_id;
@@ -1064,8 +1097,15 @@ export async function scanSingleAccount(adAccountId: number): Promise<ScanResult
     } as any;
   }
 
+  // Same handling as scanAllAccounts, so a scan-all loop over accounts can carry on.
   if (!activeCredential) {
-    throw new Error("No active credential for this client. Add a credential or set META_SYSTEM_USER_TOKEN.");
+    const error = "No active credential for this client. Add a credential or set META_SYSTEM_USER_TOKEN.";
+    await storage.updateAdAccount(account.id, {
+      status: "degraded",
+      lastScanError: "No active credential available",
+      lastScanErrorCode: "NO_CREDENTIAL",
+    });
+    return { accountId: account.id, success: false, issuesFound: 0, adsScanned: 0, coverageUpdated: false, error, errorCode: "NO_CREDENTIAL" };
   }
 
   return scanAdAccount(account, activeCredential, client);

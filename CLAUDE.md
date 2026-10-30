@@ -39,13 +39,16 @@ Server layers:
 Scan pipeline (`scanAdAccount`):
 1. Resolve a token. If the client has no active credential, a synthetic credential with `id: 0` is built from `META_SYSTEM_USER_TOKEN`. `resolveToken` always prefers that env var for `system_user_token` credentials. For other credential types it returns `credential.tokenOwner`, which in practice holds a label, not a token.
 2. Smoke-test the account. On failure, mark the account `degraded`, possibly mark the credential `expired`, and create an `ACCESS_001` issue.
-3. Fetch ads, ad sets, campaigns, pages and IG accounts in parallel, and update the account's coverage flags.
-4. For each ACTIVE/PAUSED ad, run `checkAiToggles`, `checkPlacementFit`, `checkCreativeIntegrity` and `checkTracking`. Each returns `Finding[]` with `ruleId`, `severity`, `evidence`, `recommendedFix` and so on.
-5. `storage.deleteIssuesByAdAccount()` wipes **all** issues for the account, including resolved and dismissed ones, then the findings are inserted with `status: "open"`, `routeTo: "buyer"`.
+3. Fetch ads (only `SCANNED_STATUSES`, filtered on Meta's side, because big accounts hold thousands of archived ads), ad sets, campaigns, pages and IG accounts in parallel, and update the account's coverage flags.
+4. `measureAssets` downloads each distinct asset image once (8 at a time) to get its pixel size. Video ads are sized from `video_data.image_url` (the cover). `creative.thumbnail_url` is a 64x64 square crop, so it's never used for shape. Ratios are classified with the tolerant `parseAspectRatio`.
+5. For each ad, run `checkAiToggles`, `checkPlacementFit`, `checkCreativeIntegrity` and `checkTracking`. Each returns `Finding[]` with `ruleId`, `severity`, `evidence`, `recommendedFix` and so on. Link-based rules read every destination URL through `getCreativeLinks` (link_data, video CTA, carousel cards, asset_feed_spec), and `hasUtm` also counts UTMs in the creative's `url_tags`.
+6. `storage.deleteIssuesByAdAccount()` wipes **all** issues for the account, including resolved and dismissed ones, then the findings are batch-inserted with `status: "open"`, `routeTo: "buyer"`.
+
+Scans run one account per request. The dashboard's "Scan All" and the client page both loop over `POST /api/scan/account/:id` and show progress, because one request covering every account times out. `/api/scan/all` still exists but the UI no longer uses it.
 
 Adding a rule: push a `Finding` from the matching `check*` function, using a new rule ID in the existing `AI_` / `ASPECT_` / `CREATIVE_` / `TRACK_` / `ACCESS_` families. The `issueType` must be one of the enum values in `scanIssues`. Client policy fields (`allowedDomains`, `allowedPageIds`, `allowedIgActorIds`, `allowedAiEnhancements`, `requiredUtm`) on the `Client` are what make rules client-specific. Update the rule list in `replit.md` too, since that file documents the rule catalogue.
 
-`auditAccountUrls` (the URLs tab) is separate from scanning. It extracts destination URLs and UTM params from every creative shape (link_data, video_data, carousel children, asset_feed_spec, shared posts with `url_tags`) without creating issues.
+`auditAccountUrls` (the URLs tab) is separate from scanning. It lists every ad's destination URLs (via `getCreativeLinks`, plus shared posts with `url_tags`) and their UTM params without creating issues. It fetches ads of all statuses.
 
 Client (`client/src`, React 18 + Vite + wouter + TanStack Query + shadcn/ui in `components/ui`):
 - The default `queryFn` in `lib/queryClient.ts` fetches `queryKey.join("/")`. Query keys therefore *are* URL segments, e.g. `["/api/clients", id, "ad-accounts"]`, and mutations invalidate by the same keys. Writes go through `apiRequest(method, url, body)`. `staleTime` is `Infinity` and retries are off, so data only refreshes through explicit invalidation.
